@@ -16,7 +16,11 @@
 !include MediaTekPkg/MediaTekPkg.dsc.inc
 
 [BuildOptions]
-  *_*_AARCH64_CC_FLAGS = -march=armv8.2-a+crypto+rcpc
+  # MediaTekPkg's shared DXE drivers are never exercised by the upstream CI
+  # matrix (no MediaTek device is Active there), so they carry latent
+  # unused-but-set-variable warnings (e.g. MsdcDxe stub functions). Relax
+  # that single diagnostic for the rodin build only; no code is changed.
+  *_*_AARCH64_CC_FLAGS = -march=armv8.2-a+crypto+rcpc -Wno-unused-but-set-variable
 
 [PcdsFixedAtBuild]
   #
