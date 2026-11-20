@@ -1,8 +1,8 @@
 /**
   rodin (Redmi Turbo 4 / POCO X7 Pro, MT6899) - Memory Map Library.
 
-  Data sources (all verified against the rodin vendor dumps under
-  turbo4分区/ and the vendor DTB unless explicitly marked TODO(MT6899)):
+  Data sources (verified against the rodin vendor dumps under turbo4分区/ — the
+  vendor DTB, lk.img, preloader_raw.img, gz.img — unless marked TODO(MT6899)):
     * DDR low window: vendor DTB /memory@40000000 = 0x40000000 + 0x40000000 (1 GiB).
     * Framework regions (UEFI Stack / FD / DXE heap) follow the standard MediaTek
       Mu-Silicium low-DRAM convention; the DXE heap is split around the Xiaomi
@@ -12,27 +12,44 @@
       the OS / DXE heap.
     * Register regions: every base below was transcribed from the rodin vendor
       DTB (gic500@c000000, gic-cpu@c400000, syscon@10000000 topckgen,
-      infracfg_ao 0x10001000, apmixedsys 0x1000c000, pwrap 0x1000d000,
+      infra_infracfg_ao_reg 0x10001000, apmixedsys 0x1000c000, pwrap 0x1000d000,
       emicen@10219000, infracfg@1020e000, dramc 0x10230000, serial@11002000,
       xhci0@11200000, mmc@11240000, ufsphy@112a0000, ufshci@112b0000,
       dispsys-config@14000000, systimer@1cc10000, watchdog@1c00b000).
 
   AP watchdog: the vendor DTB exposes watchdog@1c00b000 reg 0x1c00b000 + 0x100
-  compatible "mediatek,mt6899-wdt". This is the TOPRGU register block (WDT is a
-  sub-node of the toprgu syscon); 0x1C00B000 is therefore confirmed, not a guess.
+  compatible "mediatek,mt6899-wdt" (TOPRGU syscon child) -> 0x1C00B000 is
+  source-confirmed, not a guess.
 
-  TODO(MT6899) before hardware use:
-    * High DRAM: board.toml declares dram_size = 0x300000000 (12 GiB) at base
-      0x40000000, i.e. a contiguous 0x40000000..0x340000000 span. The vendor DTB
-      only describes the low 1 GiB and carries an EMPTY /memreserve/ table, and
-      gz.img (GenieZone) computes DRAM size at runtime - so the usable split and
-      every TEE/ATF/SPM/SSPM/SCP/display carveout must come from the bootloader
-      (LK "reserved mblock") table. Until that table is sourced, the whole region
-      above the verified low window is mapped as Reserv (NOT handed to the OS):
-      feeding unsourced DRAM to the payload would risk corrupting TEE/ATF.
-    * Replace the HIGH_DRAM_RESERVE placeholder below with the real per-region
-      carveouts once the LK DRAM table (or /proc/iomem on a booted device) is
-      available, then re-classify the remaining holes as Conv.
+  ----------------------------------------------------------------------------
+  High DRAM and firmware carveouts - why they are NOT hardcoded here
+  ----------------------------------------------------------------------------
+  Total DRAM is 12 GiB (board.toml dram_size = 0x300000000) at base 0x40000000,
+  i.e. a contiguous 0x40000000..0x340000000 span. lk.img / preloader_raw.img do
+  NOT contain a static absolute memory-layout table: LK computes DRAM size from
+  the preloader "dram_para"/calibration at boot (lk strings: "Total DRAM = %llx",
+  "dramc: read size from dram_para"), and allocates every reserved mblock at
+  runtime from DRAM (the DTB carrier properties carry sizes, but their address
+  fields are literally 0, e.g. scp-remap-addr=0, sspm-res-ram-start=0). All three
+  vendor DTBs (vendor_boot/dtbo/tee) also have an EMPTY /memreserve/ table.
+
+  Real carveout SIZES that ARE present in the vendor DTB (base = runtime, so not
+  placed here; recorded for the bootloader/OEM table lookup):
+    * SCP        : scp-dram-size 0x00200000 (2 MiB), sram-size 0x240000
+    * SSPM       : sspm-res-ram-size 0x00110000 (1.0625 MiB), share-region 0x8000 @ +0x38000
+    * VCP        : vcp-dram-size 0x00800000 (8 MiB), secure-dump 0x200000 @ +0x600000
+    * MCUPM/SSPM/GPUEB met-res-ram : 0x00400000 each
+    * SVP 0x06000000 / TUI 0x04000000 / Prot 0x02000000 (memory-ssmr-features)
+    * SSMR reserved CMA 0x10000000 ; CCCI dpmaif cache 0x190000 / nocache 0x50000 ;
+      MKP kernel-code-protection 0x10000 ; connected-SCP shm 0x20000 @ remap-offset 0x2100000
+    * TEE / ATF(BL31) / GZ(GenieZone) / modem : sizes/sites not exposed in these images.
+
+  Therefore the region above the verified low window is mapped as a single
+  Reserv placeholder (deliberately NOT handed to the OS: feeding unsourced DRAM
+  to the payload would risk corrupting TEE/ATF). Replace it with the real
+  per-region carveouts once the bootloader LK "reserved mblock" table - or
+  /proc/iomem / an mrdump from a booted rodin - is available, then promote the
+  leftover holes to Conv.
 
   SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
@@ -52,8 +69,8 @@ STATIC EFI_MEMORY_REGION_DESCRIPTOR gMemoryDescriptor[] = {
   {"DXE Heap High",      0x6F010000, 0x10FF0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK},
 
   // ---- High DRAM placeholder (12 GiB total - 1 GiB low window = 11 GiB) ----
-  // TODO(MT6899): carve TEE/ATF/SPM/SSPM/display out of the bootloader DRAM table
-  // and promote the leftover to Conv. Kept Reserv until that table is sourced.
+  // TODO(MT6899): carve TEE/ATF/SPM/SSPM/VCP/SCP/display out of the bootloader DRAM
+  // table and promote the leftover to Conv. Kept Reserv until that table is sourced.
   {"High DRAM Reserve",  0x80000000, 0x2C0000000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
 
   // ---- Register / MMIO regions (bases verified against vendor DTB) ----
