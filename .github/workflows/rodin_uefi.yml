@@ -1,0 +1,27 @@
+name: Build UEFI for rodin
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - '.github/workflows/rodin_uefi.yml'
+      - 'Platforms/Xiaomi/rodinPkg/**'
+      - 'Silicon/MediaTek/**'
+      - 'Resources/Configs/rodin.toml'
+      - 'Resources/DTBs/rodin.dtb'
+  workflow_dispatch:
+env:
+  CI_BUILD: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build UEFI for rodin
+        run: bash ./setup_env.sh -p apt && python3 ./build_uefi.py -d rodin -r DEBUG -c
+
+      - name: Upload UEFI image
+        uses: actions/upload-artifact@v7
+        with:
+          name: uefi-rodin
+          path: ./Mu-rodin*
+          compression-level: 9

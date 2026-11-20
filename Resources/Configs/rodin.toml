@@ -1,0 +1,30 @@
+#
+# UEFI FD Configs
+# FD region must match the rodin MemoryMapLib FD descriptor (0x40040000, 0x200000).
+#
+[uefi_fd]
+base = 0x40040000
+size = 0x200000
+
+#
+# Android Boot Image Kernel Configs
+#
+[boot_image_kernel]
+kernel_compression = "gzip"
+append_dtb         = false
+
+#
+# Android Boot Image Configs
+# TODO(MT6899): offsets below are carried over from the lancelot (MT6768) template
+# and must be re-derived from the rodin vendor boot configuration.
+#
+[boot_image]
+base           = 0x40078000
+cmdline        = "bootopt=64S3,32N2,64N2"
+dtb            = "Resources/DTBs/rodin.dtb"
+dtb_offset     = 0x0BC08000
+header_version = 2
+kernel_offset  = 0x00008000
+ramdisk_offset = 0x07C08000
+second_offset  = 0xBFF88000
+tags_offset    = 0x0BC08000
