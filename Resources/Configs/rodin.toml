@@ -1,10 +1,18 @@
 #
+# Boot Shim Configs
+# Rodin uses the Silicium BootShim handoff: LK loads the shim as a boot-header-v4
+# "kernel", the shim relocates the UEFI FD to [uefi_fd].base and jumps to it.
+#
+[boot_shim]
+requires_kernel_header = true
+
+#
 # UEFI FD Configs
-# FD region must match the rodin MemoryMapLib FD descriptor (0x40040000, 0x200000).
+# FD region must match the rodin MemoryMapLib "UEFI FD" descriptor (0xA7100000, 0x300000).
 #
 [uefi_fd]
-base = 0x40040000
-size = 0x200000
+base = 0xA7100000
+size = 0x300000
 
 #
 # Android Boot Image Kernel Configs
@@ -15,19 +23,8 @@ append_dtb         = false
 
 #
 # Android Boot Image Configs
-# TODO(MT6899): ramdisk/dtb/second/tags offsets below are carried over from the
-# lancelot (MT6768) template and must be re-derived from the rodin vendor boot
-# configuration before flashing.
-# base + kernel_offset must equal the FD base above (0x40040000) so the bootloader
-# loads the UEFI FD at the address it was linked for.
+# Stock rodin boot.img is Android boot header v4 (kernel-only, ramdisk in init_boot);
+# BootShim supplies the kernel header, so no explicit load offsets are needed.
 #
 [boot_image]
-base           = 0x40038000
-cmdline        = "bootopt=64S3,32N2,64N2"
-dtb            = "Resources/DTBs/rodin.dtb"
-dtb_offset     = 0x0BC08000
-header_version = 2
-kernel_offset  = 0x00008000
-ramdisk_offset = 0x07C08000
-second_offset  = 0xBFF88000
-tags_offset    = 0x0BC08000
+header_version = 4
