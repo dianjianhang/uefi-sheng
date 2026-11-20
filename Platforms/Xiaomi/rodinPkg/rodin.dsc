@@ -21,16 +21,15 @@
 [PcdsFixedAtBuild]
   #
   # DDR Memory
-  # The vendor DTB only describes a 1 GiB window at 0x40000000.
-  # TODO(MT6899): full DRAM (12 GiB) bring-up is deferred.
+  # Live /proc/device-tree/memory@40000000: 0x40000000 + 0x300000000 (12 GiB, single bank).
   #
   gArmTokenSpaceGuid.PcdSystemMemoryBase|0x40000000
-  gArmTokenSpaceGuid.PcdSystemMemorySize|0x40000000
+  gArmTokenSpaceGuid.PcdSystemMemorySize|0x300000000
 
   #
-  # UEFI Stack
+  # UEFI Stack (must match the "UEFI Stack" BsData descriptor at 0xA760D000)
   #
-  gArmPlatformTokenSpaceGuid.PcdCPUCoresStackBase|0x40000000
+  gArmPlatformTokenSpaceGuid.PcdCPUCoresStackBase|0xA760D000
   gArmPlatformTokenSpaceGuid.PcdCPUCorePrimaryStackSize|0x40000
 
   #
