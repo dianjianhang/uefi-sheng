@@ -5,7 +5,7 @@
   HyperOS 4.0 / Android 17, kernel 6.6.118, KernelSU root) on 2025-11-21:
 
       /proc/device-tree/memory@40000000        -> 0x40000000 + 0x300000000 (12 GiB, single bank)
-      /proc/device-tree/reserved-memory/*/reg  -> 53 LK "mblock" carveouts (base + size)
+      /proc/device-tree/reserved-memory (each mblock reg)  -> 53 LK "mblock" carveouts (base+size)
       /proc/iomem                              -> System RAM holes + MMIO register ranges
 
   The live device tree carries the addresses LK actually programmed (the vendor
