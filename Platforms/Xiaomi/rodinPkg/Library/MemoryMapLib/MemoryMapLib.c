@@ -1,55 +1,30 @@
 /**
   rodin (Redmi Turbo 4 / POCO X7 Pro, MT6899) - Memory Map Library.
 
-  Data sources (verified against the rodin vendor dumps under turbo4分区/ — the
-  vendor DTB, lk.img, preloader_raw.img, gz.img — unless marked TODO(MT6899)):
-    * DDR low window: vendor DTB /memory@40000000 = 0x40000000 + 0x40000000 (1 GiB).
-    * Framework regions (UEFI Stack / FD / DXE heap) follow the standard MediaTek
-      Mu-Silicium low-DRAM convention; the DXE heap is split around the Xiaomi
-      bootmonitor_pmsg carveout.
-    * BootMonitor PMSG: vendor DTB /soc/bootmonitor_pmsg@6ec00000 reg = 0x6ec00000
-      + 0x410000. Reserved so the firmware never hands the pmsg/console ring to
-      the OS / DXE heap.
-    * Register regions: every base below was transcribed from the rodin vendor
-      DTB (gic500@c000000, gic-cpu@c400000, syscon@10000000 topckgen,
-      infra_infracfg_ao_reg 0x10001000, apmixedsys 0x1000c000, pwrap 0x1000d000,
-      emicen@10219000, infracfg@1020e000, dramc 0x10230000, serial@11002000,
-      xhci0@11200000, mmc@11240000, ufsphy@112a0000, ufshci@112b0000,
-      dispsys-config@14000000, systimer@1cc10000, watchdog@1c00b000).
+  GENERATED from a live, root-verified dump of a booted rodin (model 24129RT7CC,
+  HyperOS 4.0 / Android 17, kernel 6.6.118, KernelSU root) on 2025-11-21:
 
-  AP watchdog: the vendor DTB exposes watchdog@1c00b000 reg 0x1c00b000 + 0x100
-  compatible "mediatek,mt6899-wdt" (TOPRGU syscon child) -> 0x1C00B000 is
-  source-confirmed, not a guess.
+      /proc/device-tree/memory@40000000        -> 0x40000000 + 0x300000000 (12 GiB, single bank)
+      /proc/device-tree/reserved-memory/*/reg  -> 53 LK "mblock" carveouts (base + size)
+      /proc/iomem                              -> System RAM holes + MMIO register ranges
 
-  ----------------------------------------------------------------------------
-  High DRAM and firmware carveouts - why they are NOT hardcoded here
-  ----------------------------------------------------------------------------
-  Total DRAM is 12 GiB (board.toml dram_size = 0x300000000) at base 0x40000000,
-  i.e. a contiguous 0x40000000..0x340000000 span. lk.img / preloader_raw.img do
-  NOT contain a static absolute memory-layout table: LK computes DRAM size from
-  the preloader "dram_para"/calibration at boot (lk strings: "Total DRAM = %llx",
-  "dramc: read size from dram_para"), and allocates every reserved mblock at
-  runtime from DRAM (the DTB carrier properties carry sizes, but their address
-  fields are literally 0, e.g. scp-remap-addr=0, sspm-res-ram-start=0). All three
-  vendor DTBs (vendor_boot/dtbo/tee) also have an EMPTY /memreserve/ table.
+  The live device tree carries the addresses LK actually programmed (the vendor
+  boot/lk images only carry sizes, with address fields zeroed), so this is the
+  authoritative absolute layout - no value below is invented.
 
-  Real carveout SIZES that ARE present in the vendor DTB (base = runtime, so not
-  placed here; recorded for the bootloader/OEM table lookup):
-    * SCP        : scp-dram-size 0x00200000 (2 MiB), sram-size 0x240000
-    * SSPM       : sspm-res-ram-size 0x00110000 (1.0625 MiB), share-region 0x8000 @ +0x38000
-    * VCP        : vcp-dram-size 0x00800000 (8 MiB), secure-dump 0x200000 @ +0x600000
-    * MCUPM/SSPM/GPUEB met-res-ram : 0x00400000 each
-    * SVP 0x06000000 / TUI 0x04000000 / Prot 0x02000000 (memory-ssmr-features)
-    * SSMR reserved CMA 0x10000000 ; CCCI dpmaif cache 0x190000 / nocache 0x50000 ;
-      MKP kernel-code-protection 0x10000 ; connected-SCP shm 0x20000 @ remap-offset 0x2100000
-    * TEE / ATF(BL31) / GZ(GenieZone) / modem : sizes/sites not exposed in these images.
+  Tiling: the whole 12 GiB bank is partitioned with NO overlaps into
+    * BsData : UEFI stack + firmware volume (low DRAM, 0x40000000..0x40240000),
+    * Reserv : every LK mblock -- BL31/ATF, TEE secmem/reserved/shm, GZ, SCP, SSPM,
+               MCUPM, VCP, APU/apusys, ADSP, modem (md_mem/ap_md_*), framebuffer,
+               display, connsys wifi/bt, wifi dma-pool, security, debug/log buffers,
+    * Conv   : remaining free DRAM (~10.85 GiB total, matches MemTotal ~10.6 GiB).
 
-  Therefore the region above the verified low window is mapped as a single
-  Reserv placeholder (deliberately NOT handed to the OS: feeding unsourced DRAM
-  to the payload would risk corrupting TEE/ATF). Replace it with the real
-  per-region carveouts once the bootloader LK "reserved mblock" table - or
-  /proc/iomem / an mrdump from a booted rodin - is available, then promote the
-  leftover holes to Conv.
+  Reserve-all-mblocks is deliberate and safe: launched after LK, these regions are
+  physically owned by ATF/TEE/coprocessors and must never reach the payload; if UEFI
+  ever replaced LK they are simply unused (small RAM loss, no corruption).
+
+  MMIO bases verified against live /proc/iomem. Note: GICD is at 0x0C400000 (NOT
+  0x0C000000), GICR at 0x0C440000, and the PMIC interface is SPMI at 0x1CC04000.
 
   SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
@@ -59,39 +34,108 @@
 STATIC EFI_MEMORY_REGION_DESCRIPTOR gMemoryDescriptor[] = {
   // Name, Address, Length, HobOption, ResourceType, ResourceAttribute, MemoryType, ArmAttribute
 
-  // ---- DDR low window: vendor DTB /memory@40000000 (0x40000000 + 1 GiB) ----
-  {"UEFI Stack",         0x40000000, 0x00040000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},
-  {"UEFI FD",            0x40040000, 0x00200000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},
-  // DXE heap, split around the bootmonitor_pmsg carveout at 0x6EC00000.
-  {"DXE Heap Low",       0x40240000, 0x2E9C0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK},
-  // Vendor DTB /soc/bootmonitor_pmsg@6ec00000 reg 0x6ec00000 + 0x410000 (Xiaomi pmsg/log ring).
-  {"BootMonitor PMSG",   0x6EC00000, 0x00410000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
-  {"DXE Heap High",      0x6F010000, 0x10FF0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv,   WRITE_BACK},
+  // ---- DDR bank 0x40000000..0x340000000 (12 GiB): UEFI (BsData) + LK mblocks (Reserv) + free (Conv) ----
+  {"UEFI Stack", 0x40000000, 0x00040000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},
+  {"UEFI FD", 0x40040000, 0x00200000, AddMem, SYS_MEM, SYS_MEM_CAP, BsData, WRITE_BACK},
+  {"System RAM", 0x40240000, 0x07E40000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"aee-debug", 0x48080000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"minirdump", 0x48090000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x480A0000, 0x00370000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"crypto-hw", 0x48410000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x48420000, 0x003E0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"BL31-ATF", 0x48800000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x48A00000, 0x24200000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"display_platform_debug", 0x6CC00000, 0x02000000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"pstore", 0x6EC00000, 0x00410000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x6F010000, 0x08FF0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"adsp-image", 0x78000000, 0x01930000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x79930000, 0x014D0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"mtksmmu-protpgd", 0x7AE00000, 0x02200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"emi-isu", 0x7D000000, 0x01000000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"aee_lk", 0x7E000000, 0x00800000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x7E800000, 0x01080000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"gpueb-shared", 0x7F880000, 0x00180000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"tee-shm", 0x7FA00000, 0x00400000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x7FE00000, 0x000F0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"MCUPM-reserved", 0x7FEF0000, 0x00100000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"emi-mbist", 0x7FFF0000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"mm-ccu", 0x80000000, 0x00100000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x80100000, 0x07D00000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"consys-emi", 0x87E00000, 0x00D00000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"wifi-dma-pool", 0x88B00000, 0x01400000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"consys-scp-emi", 0x89F00000, 0x00020000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x89F20000, 0x000E0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"ap-md-c", 0x8A000000, 0x02560000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x8C560000, 0x01AA0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"ap-md-nc", 0x8E000000, 0x00140000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x8E140000, 0x00C20000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"apu-rv-coredump", 0x8ED60000, 0x002A0000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"scp-share", 0x8F000000, 0x00840000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x8F840000, 0x000C0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"apu-sapu-gzshm", 0x8F900000, 0x00100000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"apu-rv-secure", 0x8FA00000, 0x00600000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x90000000, 0x0F060000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"sspm-ap-shared", 0x9F060000, 0x00110000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"met-res-ram", 0x9F170000, 0x00C00000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"SSPM-reserved", 0x9FD70000, 0x00280000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x9FFF0000, 0x18010000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"SCP-reserved", 0xB8000000, 0x00A00000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xB8A00000, 0x06600000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"vcp-reserved", 0xBF000000, 0x00800000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"tee-secmem", 0xBF800000, 0x00500000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xBFD00000, 0x000F0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"ccci_tag_mem", 0xBFDF0000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"atf-log", 0xBFE00000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xC0000000, 0x0C000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"md-mem", 0xCC000000, 0x04110000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xD0110000, 0x000F0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"md-mem", 0xD0200000, 0x00250000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xD0450000, 0x00BB0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"md-mem", 0xD1000000, 0x074B0000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xD84B0000, 0x112D0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"md-mem", 0xE9780000, 0x00880000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xEA000000, 0x02000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"adsp-shared", 0xEC000000, 0x00CB0000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xECCB0000, 0x00350000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"dfd-dfdmcu_dump", 0xED000000, 0x00280000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xED280000, 0x00D80000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"dfd-dfdsoc_dump", 0xEE000000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"tee-reserved", 0xEE200000, 0x0E300000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xFC500000, 0x000C0000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"dfd-slbc_shared", 0xFC5C0000, 0x00040000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"gpu-mputab", 0xFC600000, 0x00600000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xFCC00000, 0x00020000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"framebuffer", 0xFCC20000, 0x033D0000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0xFFFF0000, 0xC0000000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"dramc-rk0", 0x1BFFF0000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x1C0000000, 0x165800000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"mkp", 0x325800000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"gpu-reserved", 0x325A00000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"gz", 0x325C00000, 0x02000000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"cmdq-reserved", 0x327C00000, 0x00200000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"gz-log", 0x327E00000, 0x00050000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"System RAM", 0x327E50000, 0x00110000, AddMem, SYS_MEM, SYS_MEM_CAP, Conv, WRITE_BACK},
+  {"security-dice", 0x327F60000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"security-booker", 0x327F70000, 0x18000000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"log_store", 0x33FF70000, 0x00080000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
+  {"dramc-rk1", 0x33FFF0000, 0x00010000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
 
-  // ---- High DRAM placeholder (12 GiB total - 1 GiB low window = 11 GiB) ----
-  // TODO(MT6899): carve TEE/ATF/SPM/SSPM/VCP/SCP/display out of the bootloader DRAM
-  // table and promote the leftover to Conv. Kept Reserv until that table is sourced.
-  {"High DRAM Reserve",  0x80000000, 0x2C0000000, AddMem, MEM_RES, SYS_MEM_CAP, Reserv, WRITE_BACK},
-
-  // ---- Register / MMIO regions (bases verified against vendor DTB) ----
-  {"GIC Distributor",    0x0C000000, 0x00400000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // gic500@c000000
-  {"GIC CPU Interface",  0x0C400000, 0x00040000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // gic-cpu@c400000
-  {"Top Ck Gen",         0x10000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // syscon@10000000 topckgen
-  {"Infracfg AO",        0x10001000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // infra_infracfg_ao_reg
-  {"Pinctrl/GPIO",       0x10005000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // gpio/pinctrl
-  {"AP Mixed",           0x1000C000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // apmixedsys 0x1000c000
-  {"PMIC Wrapper",       0x1000D000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // pwrap
-  {"EMI",                0x10219000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // emicen@10219000
-  {"Infracfg",           0x1020E000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // infracfg@1020e000
-  {"Dramc Ch0",          0x10230000, 0x00002000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // dramc 0x10230000
-  {"UART0",              0x11002000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // serial@11002000
-  {"MSDC-0",             0x11240000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // mmc@11240000
-  {"UFS PHY",            0x112A0000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // ufsphy@112a0000
-  {"UFS HCI",            0x112B0000, 0x00002A00, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // ufshci@112b0000
-  {"USB XHCI",           0x11200000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // xhci0@11200000
-  {"Display Config",     0x14000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // dispsys-config@14000000
-  {"Systimer",           0x1CC10000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}, // systimer@1cc10000
-  {"WatchDog Timer",     0x1C00B000, 0x00000100, AddDev, MMAP_IO, UNCACHEABLE, MmIO,   NS_DEVICE}  // watchdog@1c00b000 (mt6899-wdt, confirmed)
+  // ---- Register / MMIO regions (bases verified against live /proc/iomem) ----
+  {"GIC Distributor", 0x0C400000, 0x00040000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // GICD -- live /proc/iomem (NOT 0x0C000000)
+  {"GIC Redistributor", 0x0C440000, 0x00200000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // GICR -- live /proc/iomem
+  {"Top Ck Gen", 0x10000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // syscon@10000000 topckgen (live)
+  {"Infracfg AO", 0x10001000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // infracfg-ao@10001000 (live)
+  {"Pinctrl/GPIO", 0x10005000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // pinctrl -- vendor DTB
+  {"AP Mixed", 0x1000C000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // syscon@1000c000 apmixedsys (live)
+  {"Dramc Ch0", 0x10230000, 0x00002000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // dramc@10230000 (live)
+  {"UART0", 0x11002000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // serial (live)
+  {"USB0 XHCI", 0x11200000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // 11201000.usb0 (live)
+  {"MSDC-0", 0x11240000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // mmc@11240000 -- vendor DTB
+  {"UFS PHY", 0x112A0000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // ufsphy@112a0000 (live)
+  {"UFS HCI", 0x112B0000, 0x00002A00, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // ufshci@112b0000 (live)
+  {"Display Config", 0x14000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // dispsys-config@14000000 (live)
+  {"WatchDog Timer", 0x1C00B000, 0x00000100, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // watchdog@1c00b000 mt6899-wdt (live)
+  {"SPMI/PMIC", 0x1CC04000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // 1cc04000.spmi pmif -- live (PMIC via SPMI)
 };
 
 VOID
