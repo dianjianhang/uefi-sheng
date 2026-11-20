@@ -23,5 +23,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: uefi-rodin
-          path: ./Mu-rodin*
+          path: |
+            Mu-rodin*
+            Build/rodinPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd
           compression-level: 9

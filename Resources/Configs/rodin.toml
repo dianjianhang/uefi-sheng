@@ -15,11 +15,14 @@ append_dtb         = false
 
 #
 # Android Boot Image Configs
-# TODO(MT6899): offsets below are carried over from the lancelot (MT6768) template
-# and must be re-derived from the rodin vendor boot configuration.
+# TODO(MT6899): ramdisk/dtb/second/tags offsets below are carried over from the
+# lancelot (MT6768) template and must be re-derived from the rodin vendor boot
+# configuration before flashing.
+# base + kernel_offset must equal the FD base above (0x40040000) so the bootloader
+# loads the UEFI FD at the address it was linked for.
 #
 [boot_image]
-base           = 0x40078000
+base           = 0x40038000
 cmdline        = "bootopt=64S3,32N2,64N2"
 dtb            = "Resources/DTBs/rodin.dtb"
 dtb_offset     = 0x0BC08000
