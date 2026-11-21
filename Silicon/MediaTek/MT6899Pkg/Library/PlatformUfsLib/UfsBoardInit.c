@@ -26,6 +26,38 @@
 //
 #define MT6899_UFS_HCI_BASE    0x112B0000UL
 #define MT6899_UFS_PHY_BASE    0x112A0000UL
+#define MT6899_UFS_CFG_AO_BASE 0x112B8000UL   // syscon@112b8000 ufscfg_ao
+#define MT6899_UFS_CFG_PDN_BASE 0x112BB000UL  // syscon@112bb000 ufscfg_pdn
+
+//
+// MT6899 UFS clock gates (from Linux clk-mt6899-peri.c, gate regs setclr):
+//   ufscfg_ao  +0x8 SET / +0xC CLR / +0x4 STA, value 1 enables the gate.
+//   ufscfg_pdn +0x8 SET / +0xC CLR / +0x4 STA (same layout).
+//
+// ufsao_clks:  bit3  unipro_sys   (parent ufs_ck)
+//              bit8  u_phy_sap     (parent vlp_infra_26m_ck)
+//              bit9  u_phy_ahb_s_busck (parent ufs_faxi_ck)
+// ufspdn_clks: bit0  ufshci_ufs
+//              bit1  ufshci_aes
+//              bit3  ufshci_u_ahb
+//
+// Without u_phy_sap (26 MHz PHY reference) and u_phy_ahb_s_busck, all MPHY
+// MMIO writes at 0x112A0000 are dropped by the bus (read back as 0) and
+// DME_LINK_STARTUP always fails with arg2=1. This is the v7 root cause.
+//
+#define UFSCFG_CG_SET_OFFSET    0x08
+#define UFSCFG_CG_CLR_OFFSET    0x0C
+#define UFSCFG_CG_STA_OFFSET    0x04
+
+#define UFSAO_BIT_UNIPRO_SYS    BIT3
+#define UFSAO_BIT_PHY_SAP       BIT8
+#define UFSAO_BIT_PHY_AHB       BIT9
+#define UFSPDN_BIT_UFSHCI_UFS   BIT0
+#define UFSPDN_BIT_UFSHCI_AES   BIT1
+#define UFSPDN_BIT_UFSHCI_AHB   BIT3
+
+#define UFSAO_CLK_MASK (UFSAO_BIT_UNIPRO_SYS | UFSAO_BIT_PHY_SAP | UFSAO_BIT_PHY_AHB)
+#define UFSPDN_CLK_MASK (UFSPDN_BIT_UFSHCI_UFS | UFSPDN_BIT_UFSHCI_AES | UFSPDN_BIT_UFSHCI_AHB)
 
 //
 // MediaTek UFSHCI vendor registers (inside the UFSHCI window)
@@ -41,7 +73,6 @@
 //   assert   = write bit to +0x48 (reset set)
 //   deassert = write bit to +0x4c (reset clear)
 //
-#define MT6899_UFS_CFG_PDN_BASE  0x112BB000UL
 #define UFS_RST_ASSERT_REG       0x48
 #define UFS_RST_DEASSERT_REG     0x4C
 #define UFS_RST_UNIPRO_BIT       BIT0
@@ -109,6 +140,42 @@ MphyClearBits (
   )
 {
   MmioAnd32 (MT6899_UFS_PHY_BASE + Offset, ~Bits);
+}
+
+/**
+   Enable every clock the UFS controller, UniPro and MPHY need.
+
+   Ported from Linux clk-mt6899-peri.c (ufsao/ufspdn gate clks) and the
+   TOP_UFS_SEL mux-gate in ClockImplLib.  MediaTek clk gates use the set/clr
+   register pair: writing 1 to the SET register enables the clock, and the
+   STA register reports the current state.  These gates are OFF after the
+   bootloader hands off, which is why MPHY MMIO writes read back as 0 in v7
+   and DME_LINK_STARTUP always failed with arg2=1.
+**/
+STATIC
+VOID
+Mt6899ClockEnable (
+  VOID
+  )
+{
+  UINT32 StaAo;
+  UINT32 StaPdn;
+
+  // NOTE: topckgen TOP_UFS_SEL mux/PLL is left untouched -- the bootloader
+  // configured ufs_ck before it loaded us (the HCI registers are readable),
+  // and re-selecting its parent would risk switching to a wrong clock source.
+
+  // ufscfg_ao: unipro_sys, phy_sap (26 MHz PHY ref), phy_ahb_s_busck.
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_SET_OFFSET), UFSAO_CLK_MASK);
+  // ufscfg_pdn: ufshci_ufs, ufshci_aes, ufshci_u_ahb.
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_SET_OFFSET), UFSPDN_CLK_MASK);
+  MicroSecondDelay (100);
+
+  StaAo  = MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_STA_OFFSET));
+  StaPdn = MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_STA_OFFSET));
+
+  DEBUG ((DEBUG_ERROR, "UFS CLK AO=%08x want=%08x PDN=%08x want=%08x\n",
+    StaAo, UFSAO_CLK_MASK, StaPdn, UFSPDN_CLK_MASK));
 }
 
 /**
@@ -283,11 +350,24 @@ UfsBoardInit (
   }
 
   //
-  // Bring up the MPHY analog, then the reference clock, exactly as Linux
-  // ufs_mtk_init() does (mphy_power_on -> setup_clocks/ref_clk) *before* the
-  // host reset carried out in ufs_mtk_hce_enable_notify().
+  // CRITICAL (v8 root-cause fix): enable the UFS clock gates FIRST.
+  // On MT6899 the ufscfg_ao/ufscfg_pdn gates are OFF after bootloader handoff.
+  // Without phy_sap (26 MHz PHY reference) and phy_ahb_s_busck, every MPHY
+  // MMIO write is dropped by the bus and reads back as 0 (exactly the v7
+  // symptom: 8C/9C/AC/44 all 0).  Mirror Linux clk-mt6899-peri.c + ufs_mtk_init.
+  //
+  Mt6899ClockEnable ();
+
+  //
+  // Bring up the MPHY analog, then the reference clock, before the host reset
+  // carried out in ufs_mtk_hce_enable_notify().
   //
   Mt6899MphyPowerOn ();
+
+  {
+    UINT32 C8 = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+    DEBUG ((DEBUG_ERROR, "UFS MPHY after power-on 8C=%08x (was 0 in v7)\n", C8));
+  }
 
   Status = Mt6899RefClkEnable (Ufs);
   if (EFI_ERROR (Status)) {
@@ -301,9 +381,10 @@ UfsBoardInit (
   Mt6899HostReset ();
 
   //
-  // The reset may have dropped the refclk handshake; re-assert it and re-power
-  // the MPHY (both are idempotent).
+  // The reset may have gated clocks and dropped the refclk handshake; re-enable
+  // clocks, re-power the MPHY and re-assert refclk (all idempotent).
   //
+  Mt6899ClockEnable ();
   Mt6899MphyPowerOn ();
 
   Status = Mt6899RefClkEnable (Ufs);
