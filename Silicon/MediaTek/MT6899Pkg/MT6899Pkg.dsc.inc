@@ -65,3 +65,18 @@
   ClockImplLib|MT6899Pkg/Library/ClockImplLib/ClockImplLib.inf
   PmicWrapperImplLib|MT6899Pkg/Library/PmicWrapperImplLib/PmicWrapperImplLib.inf
   MsdcImplLib|MT6899Pkg/Library/MsdcImplLib/MsdcImplLib.inf
+
+  #
+  # UFS: rodin storage is UFS 3.1 (ufshci@112b0000), not eMMC.
+  # The generic Samsung UfsDxe driver is reused; only the board init and the
+  # (unused) Samsung calibration hooks are MediaTek-specific.
+  #
+  PlatformUfsLib|MT6899Pkg/Library/PlatformUfsLib/PlatformUfsLib.inf
+  UfsCalAdapterLib|SamsungPkg/Library/UfsCalAdapterLib/UfsCalAdapterLib.inf
+
+[Components]
+  #
+  # UFS block-I/O driver + the ChipInfo protocol it consumes.
+  #
+  SamsungPkg/Drivers/UfsDxe/UfsDxe.inf
+  MT6899Pkg/Drivers/ChipInfoDxe/ChipInfoDxe.inf

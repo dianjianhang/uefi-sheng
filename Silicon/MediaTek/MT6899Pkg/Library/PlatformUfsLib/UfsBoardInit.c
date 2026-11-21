@@ -1,0 +1,236 @@
+/**
+  MT6899 (MediaTek Dimensity 8400-Ultra) UFS board initialisation.
+
+  rodin storage: ufshci@112b0000 (UFSHCI 4.0, IP_VER_MT6899 0x10450100)
+                 ufsphy@112a0000 (MT8183-compatible MPHY)
+
+  All host-controller access goes through the standard UFSHCI register window
+  (Ufs->IoAddr). MediaTek keeps its vendor registers inside that same window at
+  offsets 0x140/0x144/0x160/0x2100/..., so VsAddr aliases IoAddr.
+
+  The MPHY power-on sequence below is a direct port of the Linux driver
+  drivers/phy/mediatek/phy-mtk-ufs.c (ufs_mtk_phy_set_active); it only touches
+  four MPHY registers and needs no firmware assistance for bring-up.
+
+  SPDX-License-Identifier: BSD-2-Clause-Patent
+**/
+
+#include <Library/DebugLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+#include <Library/IoLib.h>
+#include <Library/TimerLib.h>
+#include <Library/UfsHostBridge.h>
+
+//
+// rodin register bases (vendor DTB ufshci@112b0000 / ufsphy@112a0000)
+//
+#define MT6899_UFS_HCI_BASE    0x112B0000UL
+#define MT6899_UFS_PHY_BASE    0x112A0000UL
+
+//
+// MediaTek UFSHCI vendor registers (inside the UFSHCI window)
+//
+#define REG_UFS_XOUFS_CTRL     0x140
+#define REG_UFS_REFCLK_CTRL    0x144
+#define REG_UFS_MMIO_OPT_CTRL0 0x160
+
+//
+// MediaTek MPHY registers (from phy-mtk-ufs.c)
+//
+#define MP_GLB_DIG_8C          0x008C
+#define MP_LN_DIG_RX_9C        0xA09C
+#define MP_LN_DIG_RX_AC        0xA0AC
+#define MP_LN_RX_44            0xB044
+
+#define FRC_PLL_ISO_EN         BIT8
+#define PLL_ISO_EN             BIT9
+#define FRC_FRC_PWR_ON         BIT10
+#define PLL_PWR_ON             BIT11
+
+#define FSM_DIFZ_FRC           BIT18
+
+#define FRC_RX_SQ_EN           BIT0
+#define RX_SQ_EN               BIT1
+
+#define FRC_CDR_PWR_ON         BIT17
+#define CDR_PWR_ON             BIT18
+#define FRC_CDR_ISO_EN         BIT19
+#define CDR_ISO_EN             BIT20
+
+//
+// REFCLK handshake
+//
+#define REFCLK_RELEASE         0x0
+#define REFCLK_REQUEST         BIT0
+#define REFCLK_ACK             BIT1
+#define REFCLK_TIMEOUT_US      3000
+
+#define UFS_MCLK_RATE          403000000UL   // ufs_sel max on rodin DTB
+#define UFS_GEAR_MODE          4
+
+STATIC
+VOID
+MphySetBits (
+  IN UINTN  Offset,
+  IN UINT32 Bits
+  )
+{
+  MmioOr32 (MT6899_UFS_PHY_BASE + Offset, Bits);
+}
+
+STATIC
+VOID
+MphyClearBits (
+  IN UINTN  Offset,
+  IN UINT32 Bits
+  )
+{
+  MmioAnd32 (MT6899_UFS_PHY_BASE + Offset, ~Bits);
+}
+
+/**
+  Bring the MediaTek MPHY out of reset - mirrors ufs_mtk_phy_set_active().
+**/
+STATIC
+VOID
+Mt6899MphyPowerOn (
+  VOID
+  )
+{
+  //
+  // Release DA_MP_PLL_PWR_ON
+  //
+  MphySetBits (MP_GLB_DIG_8C, PLL_PWR_ON);
+  MphyClearBits (MP_GLB_DIG_8C, FRC_FRC_PWR_ON);
+
+  //
+  // Release DA_MP_PLL_ISO_EN
+  //
+  MphyClearBits (MP_GLB_DIG_8C, PLL_ISO_EN);
+  MphyClearBits (MP_GLB_DIG_8C, FRC_PLL_ISO_EN);
+
+  //
+  // Release DA_MP_CDR_PWR_ON
+  //
+  MphySetBits (MP_LN_RX_44, CDR_PWR_ON);
+  MphyClearBits (MP_LN_RX_44, FRC_CDR_PWR_ON);
+
+  //
+  // Release DA_MP_CDR_ISO_EN
+  //
+  MphyClearBits (MP_LN_RX_44, CDR_ISO_EN);
+  MphyClearBits (MP_LN_RX_44, FRC_CDR_ISO_EN);
+
+  //
+  // Release DA_MP_RX0_SQ_EN
+  //
+  MphySetBits (MP_LN_DIG_RX_AC, RX_SQ_EN);
+  MphyClearBits (MP_LN_DIG_RX_AC, FRC_RX_SQ_EN);
+
+  //
+  // Let DIFZ settle, then release it
+  //
+  MicroSecondDelay (1);
+  MphyClearBits (MP_LN_DIG_RX_9C, FSM_DIFZ_FRC);
+}
+
+/**
+  Assert the reference clock request and wait for the controller to ack -
+  mirrors ufs_mtk_setup_ref_clk(TRUE).
+**/
+STATIC
+EFI_STATUS
+Mt6899RefClkEnable (
+  IN struct UfsHost  *Ufs
+  )
+{
+  UINT32 Value;
+  UINT32 Waited;
+
+  MmioWrite32 ((UINTN)Ufs->IoAddr + REG_UFS_REFCLK_CTRL, REFCLK_REQUEST);
+
+  for (Waited = 0; Waited < REFCLK_TIMEOUT_US; Waited += 10) {
+    Value = MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_REFCLK_CTRL);
+    if (((Value & REFCLK_ACK) >> 1) == (Value & REFCLK_REQUEST)) {
+      return EFI_SUCCESS;
+    }
+
+    MicroSecondDelay (10);
+  }
+
+  DEBUG ((DEBUG_ERROR, "UFS: refclk ack missing, reg=0x%08x\n", Value));
+  return EFI_TIMEOUT;
+}
+
+/**
+  Configure the MT6899 UFS host for first use.
+
+  Fills every field UfsDxe needs (register windows, clock rate, gear) and
+  performs the MPHY / reference-clock power-on that the Samsung implementation
+  delegates to its PMU and clock-manager drivers.
+**/
+EFI_STATUS
+UfsBoardInit (
+  IN struct UfsHost  *Ufs
+  )
+{
+  EFI_STATUS  Status;
+
+  DEBUG ((DEBUG_INFO, "UFS: MT6899 board init\n"));
+
+  //
+  // Register windows. MediaTek places its vendor registers in the UFSHCI
+  // window, so VsAddr deliberately aliases IoAddr.
+  //
+  Ufs->IoAddr      = (VOID *)(UINTN)MT6899_UFS_HCI_BASE;
+  Ufs->VsAddr      = (VOID *)(UINTN)MT6899_UFS_HCI_BASE;
+  Ufs->UniProAddr  = (VOID *)(UINTN)MT6899_UFS_HCI_BASE;
+  Ufs->PhyPma      = (VOID *)(UINTN)MT6899_UFS_PHY_BASE;
+
+  //
+  // No Exynos-style PMU / isolation registers on MediaTek.
+  //
+  Ufs->DevPwrAddr  = NULL;
+  Ufs->DevPwrShift = 0;
+  Ufs->PhyIsoAddr  = NULL;
+
+  Ufs->MclkRate    = UFS_MCLK_RATE;
+  Ufs->GearMode    = UFS_GEAR_MODE;
+
+  //
+  // Clock gating early, to avoid the ERR_CHK hazard described in
+  // ufs_mtk_hce_enable_notify().
+  //
+  MmioOr32 ((UINTN)Ufs->IoAddr + REG_UFS_XOUFS_CTRL, 0x80);
+
+  //
+  // DDR_EN for UFSHCI 4.0 (IP_VER_MT6989 and later), which covers MT6899.
+  //
+  {
+    UINT32 Value;
+
+    Value  = MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_MMIO_OPT_CTRL0);
+    Value &= ~(0x7FFF << 8);
+    Value |= (0x453000 & (0x7FFF << 8));
+    MmioWrite32 ((UINTN)Ufs->IoAddr + REG_UFS_MMIO_OPT_CTRL0, Value);
+  }
+
+  //
+  // Power up the MPHY, then gate the reference clock on.
+  //
+  Mt6899MphyPowerOn ();
+
+  Status = Mt6899RefClkEnable (Ufs);
+  if (EFI_ERROR (Status)) {
+    //
+    // Keep going: some units come out of the bootloader with the refclk
+    // already acknowledged, in which case the handshake is a no-op.
+    //
+    DEBUG ((DEBUG_WARN, "UFS: refclk handshake returned %r, continuing\n", Status));
+  }
+
+  DEBUG ((DEBUG_INFO, "UFS: MT6899 board init done (hci=0x%lx phy=0x%lx)\n",
+          (UINTN)MT6899_UFS_HCI_BASE, (UINTN)MT6899_UFS_PHY_BASE));
+
+  return EFI_SUCCESS;
+}

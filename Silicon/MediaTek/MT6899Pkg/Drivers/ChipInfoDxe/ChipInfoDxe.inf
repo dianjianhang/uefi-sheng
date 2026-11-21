@@ -1,0 +1,35 @@
+## @file
+#  Minimal MT6899 ChipInfo protocol producer.
+#
+#  The generic UfsDxe requires gEfiChipInfoProtocolGuid to be present; it only
+#  uses GetRevision() as an informational EVT version. MT6899 has no Samsung
+#  "Chip Info" memory region, so this installs a fixed-revision implementation.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = ChipInfoDxe
+  FILE_GUID                      = 0E2B7C41-9A4D-4F3B-8C1E-6D5A2F0B9C11
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = RegisterChipInfo
+
+[Sources]
+  ChipInfo.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  SamsungPkg/SamsungPkg.dec
+
+[LibraryClasses]
+  DebugLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Protocols]
+  gEfiChipInfoProtocolGuid
+
+[Depex]
+  TRUE

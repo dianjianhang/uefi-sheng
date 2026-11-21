@@ -1,0 +1,31 @@
+## @file
+#  MT6899 UFS board initialisation library.
+#
+#  Supplies UfsBoardInit() + no-op UfsCal* hooks for the generic UfsDxe driver
+#  on MediaTek MT6899 (rodin: ufshci@112b0000 + ufsphy@112a0000).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PlatformUfsLib
+  FILE_GUID                      = 6f1c2a90-3d47-4b81-9e5a-7c0d21b48f36
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = PlatformUfsLib|DXE_DRIVER
+
+[Sources]
+  UfsBoardInit.c
+  UfsCalNoop.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  SamsungPkg/SamsungPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  DebugLib
+  IoLib
+  TimerLib
+  UefiBootServicesTableLib
