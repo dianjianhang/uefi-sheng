@@ -506,3 +506,8 @@
   #
   MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenuApp.inf
   SiliciumPkg/Applications/UFPLoader/UFPLoader.inf
+
+  #
+  # UEFI Shell - recovery console when no bootable device is present.
+  #
+  ShellPkg/Application/Shell/Shell.inf
