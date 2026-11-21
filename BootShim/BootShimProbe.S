@@ -49,6 +49,24 @@ _Paint:
   stp   x3, x3, [x0], #16
   subs  x2, x2, #16
   b.ne  _Paint
+
+  /* Clean D-cache over the painted region so the white reaches DRAM: LK
+     hands over with caches enabled, so a plain store stays in cache and the
+     display controller keeps scanning the old logo. */
+  mrs   x9, ctr_el0
+  ubfx  x9, x9, #16, #4
+  mov   x10, #4
+  lsl   x9, x10, x9
+  sub   x10, x9, #1
+  ldr   x0, =FB_BASE
+  bic   x8, x0, x10
+  ldr   x7, =FB_FILL
+  add   x7, x0, x7
+_ProbeClean:
+  dc    cvac, x8
+  add   x8, x8, x9
+  cmp   x8, x7
+  b.lo  _ProbeClean
   dsb   sy
 
 #if PROBE_RESET == 1
