@@ -142,8 +142,8 @@ STATIC EFI_MEMORY_REGION_DESCRIPTOR gMemoryDescriptor[] = {
   {"GIC Distributor", 0x0C400000, 0x00040000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // GICD -- live /proc/iomem (NOT 0x0C000000)
   {"GIC Redistributor", 0x0C440000, 0x00200000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // GICR -- live /proc/iomem
   {"Top Ck Gen", 0x10000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // syscon@10000000 topckgen (live)
-  {"Infracfg AO", 0x10001000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // infracfg-ao@10001000 (live)
-  {"Pinctrl/GPIO", 0x10005000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // pinctrl -- vendor DTB
+  {"Infra Cfg AO", 0x10001000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // infracfg-ao@10001000 (live)
+  {"Pinctrl", 0x10005000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // pinctrl -- vendor DTB
   {"AP Mixed", 0x1000C000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // syscon@1000c000 apmixedsys (live)
   {"Dramc Ch0", 0x10230000, 0x00002000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // dramc@10230000 (live)
   {"UART0", 0x11002000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // serial (live)
