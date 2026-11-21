@@ -9,7 +9,7 @@ requires_kernel_header = true
 # white, holds PROBE_DELAY_S seconds, then PSCI-resets, so a plain white screen
 # proves the bootloader reached our code (independent of UEFI progress).
 source  = "BootShimProbe.S"
-defines = "-DFB_BASE=0xFCC20000 -DFB_FILL=0xE00000 -DPROBE_RESET=1 -DPROBE_DELAY_S=240"
+defines = "-DFB_BASE=0xFCC20000 -DFB_FILL=0xE00000 -DPROBE_RESET=1 -DPROBE_DELAY_S=120"
 
 #
 # UEFI FD Configs
