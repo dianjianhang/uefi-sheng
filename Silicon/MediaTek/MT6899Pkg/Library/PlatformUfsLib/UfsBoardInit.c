@@ -35,6 +35,19 @@
 #define REG_UFS_MMIO_OPT_CTRL0 0x160
 
 //
+// ufscfg_pdn reset controller (vendor DTB syscon@112bb000, phandle 0x166).
+// ti,reset-bits = <0x48 0x00 0x4c 0x00 ...> for unipro_rst / crypto_rst / hci_rst.
+//   assert   = write bit to +0x48 (reset set)
+//   deassert = write bit to +0x4c (reset clear)
+//
+#define MT6899_UFS_CFG_PDN_BASE  0x112BB000UL
+#define UFS_RST_ASSERT_REG       0x48
+#define UFS_RST_DEASSERT_REG     0x4C
+#define UFS_RST_UNIPRO_BIT       BIT0
+#define UFS_RST_CRYPTO_BIT       BIT1
+#define UFS_RST_HCI_BIT          BIT2
+
+//
 // MediaTek MPHY registers (from phy-mtk-ufs.c)
 //
 #define MP_GLB_DIG_8C          0x008C
@@ -95,6 +108,33 @@ MphyClearBits (
   )
 {
   MmioAnd32 (MT6899_UFS_PHY_BASE + Offset, ~Bits);
+}
+
+/**
+  Assert-then-deassert the UFS host resets (unipro_rst, crypto_rst, hci_rst).
+
+  Mirrors ufs_mtk_host_reset() in drivers/ufs/host/ufs-mediatek.c, which the
+  Samsung Exynos driver never performs.  Without a clean host reset the UniPro
+  and HCI can come out of the bootloader hand-off in a stale state and
+  DME_LINK_STARTUP later fails (observed as "UIC cmd 0x16 failed ... arg2=1").
+**/
+STATIC
+VOID
+Mt6899HostReset (
+  VOID
+  )
+{
+  UINT32 Mask = UFS_RST_UNIPRO_BIT | UFS_RST_CRYPTO_BIT | UFS_RST_HCI_BIT;
+
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFS_RST_ASSERT_REG), Mask);
+  MicroSecondDelay (200);
+
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFS_RST_DEASSERT_REG), Mask);
+  MicroSecondDelay (1000);
+
+  DEBUG ((DEBUG_ERROR, "UFS: host reset done (0x48=0x%08x 0x4c=0x%08x)\n",
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFS_RST_ASSERT_REG)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFS_RST_DEASSERT_REG))));
 }
 
 /**
@@ -212,6 +252,35 @@ UfsBoardInit (
   Ufs->GearMode    = UFS_GEAR_MODE;
 
   //
+  // Bring up the MPHY analog, then the reference clock, exactly as Linux
+  // ufs_mtk_init() does (mphy_power_on -> setup_clocks/ref_clk) *before* the
+  // host reset carried out in ufs_mtk_hce_enable_notify().
+  //
+  Mt6899MphyPowerOn ();
+
+  Status = Mt6899RefClkEnable (Ufs);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "UFS: refclk handshake returned %r (continuing)\n", Status));
+  }
+
+  //
+  // Host reset (unipro/crypto/hci).  Done before the XOUFS/DDR_EN programming
+  // because hci_rst clears the UFSHCI vendor registers.
+  //
+  Mt6899HostReset ();
+
+  //
+  // The reset may have dropped the refclk handshake; re-assert it and re-power
+  // the MPHY (both are idempotent).
+  //
+  Mt6899MphyPowerOn ();
+
+  Status = Mt6899RefClkEnable (Ufs);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "UFS: refclk re-handshake returned %r (continuing)\n", Status));
+  }
+
+  //
   // Clock gating early, to avoid the ERR_CHK hazard described in
   // ufs_mtk_hce_enable_notify().
   //
@@ -230,18 +299,17 @@ UfsBoardInit (
   }
 
   //
-  // Power up the MPHY, then gate the reference clock on.
+  // Diagnostics (ERROR level so it survives any DebugLib print-level filter).
   //
-  Mt6899MphyPowerOn ();
-
-  Status = Mt6899RefClkEnable (Ufs);
-  if (EFI_ERROR (Status)) {
-    //
-    // Keep going: some units come out of the bootloader with the refclk
-    // already acknowledged, in which case the handshake is a no-op.
-    //
-    DEBUG ((DEBUG_WARN, "UFS: refclk handshake returned %r, continuing\n", Status));
-  }
+  DEBUG ((DEBUG_ERROR,
+    "UFS: board init: VER=0x%08x MTKIPVER=0x%08x XOUFS=0x%08x OPT0=0x%08x "
+    "REFCLK=0x%08x HCS=0x%08x\n",
+    MmioRead32 ((UINTN)Ufs->IoAddr + 0x00),
+    MmioRead32 ((UINTN)Ufs->IoAddr + 0x2240),
+    MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_XOUFS_CTRL),
+    MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_MMIO_OPT_CTRL0),
+    MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_REFCLK_CTRL),
+    MmioRead32 ((UINTN)Ufs->IoAddr + 0x30)));
 
   DEBUG ((DEBUG_INFO, "UFS: MT6899 board init done (hci=0x%lx phy=0x%lx)\n",
           (UINTN)MT6899_UFS_HCI_BASE, (UINTN)MT6899_UFS_PHY_BASE));

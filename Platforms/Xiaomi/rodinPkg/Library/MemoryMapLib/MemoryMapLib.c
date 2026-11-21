@@ -151,6 +151,7 @@ STATIC EFI_MEMORY_REGION_DESCRIPTOR gMemoryDescriptor[] = {
   {"MSDC-0", 0x11240000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // mmc@11240000 -- vendor DTB
   {"UFS PHY", 0x112A0000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // ufsphy@112a0000 (live)
   {"UFS HCI", 0x112B0000, 0x00003000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // ufshci@112b0000 (live)
+  {"UFS CFG PDN", 0x112BB000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // syscon@112bb000 ufscfg_pdn reset ctrl (UFS host reset unipro/crypto/hci)
   {"Display Config", 0x14000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // dispsys-config@14000000 (live)
   {"WatchDog Timer", 0x1C00B000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // watchdog@1c00b000 mt6899-wdt (live)
   {"SPMI/PMIC", 0x1CC04000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // 1cc04000.spmi pmif -- live (PMIC via SPMI)
