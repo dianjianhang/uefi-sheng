@@ -20,17 +20,35 @@ UfsCalInit (struct UfsCalParam *p)
   return UFS_CAL_NO_ERROR;
 }
 
+/* MT6899 vendor UIC attributes (Linux ufs/unipro.h). */
+#define VS_SAVEPOWERCONTROL_ATTR  0xD0A6
+#define VS_DEBUGOMC_ATTR          0xD09E
+
 UfsCalError
 UfsCalPreLink (struct UfsCalParam *p)
 {
-  (VOID)p;
+  UINT32 Value = 0;
+
+  if (p != NULL && p->Host != NULL) {
+    /* MT6899: clear VS_SAVEPOWERCONTROL bit6 before link start-up. */
+    ufs_lld_dme_get (p->Host, UIC_ARG_MIB (VS_SAVEPOWERCONTROL_ATTR), &Value);
+    Value &= ~(1u << 6);
+    ufs_lld_dme_set (p->Host, UIC_ARG_MIB (VS_SAVEPOWERCONTROL_ATTR), Value);
+  }
   return UFS_CAL_NO_ERROR;
 }
 
 UfsCalError
 UfsCalPostLink (struct UfsCalParam *p)
 {
-  (VOID)p;
+  UINT32 Value = 0;
+
+  if (p != NULL && p->Host != NULL) {
+    /* MT6899: fix device PA_INIT no-adapt (VS_DEBUGOMC bit8). */
+    ufs_lld_dme_get (p->Host, UIC_ARG_MIB (VS_DEBUGOMC_ATTR), &Value);
+    Value |= 0x100;
+    ufs_lld_dme_set (p->Host, UIC_ARG_MIB (VS_DEBUGOMC_ATTR), Value);
+  }
   return UFS_CAL_NO_ERROR;
 }
 

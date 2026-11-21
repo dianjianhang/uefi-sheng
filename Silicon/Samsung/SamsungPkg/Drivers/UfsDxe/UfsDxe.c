@@ -246,6 +246,13 @@ UfsSendUicCmd (struct UfsHost *Ufs)
     Ufs->UicCmd->Arg3 = MmioRead32((UINTN)(Ufs->IoAddr + REG_UIC_COMMAND_ARG_3));
   }
 
+  if (ErrorCode != 0 || Error != UFS_NO_ERROR) {
+    DEBUG ((EFI_D_ERROR,
+      "UFS: UIC cmd 0x%02x failed arg1=0x%08x arg2=0x%08x err=%d IS=0x%08x\n",
+      Ufs->UicCmd->uiccmdr, Ufs->UicCmd->Arg1, ErrorCode, Error,
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_INTERRUPT_STATUS))));
+  }
+
   return ErrorCode | Error;
 }
 
@@ -844,6 +851,12 @@ UfsPreSetup (
       }
       MicroSecondDelay (10);
     }
+  }
+
+  if (!(MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_ENABLE)) & 1)) {
+    DEBUG ((EFI_D_ERROR, "UFS: HCE=0 STATUS=0x%08x IS=0x%08x\n",
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS)),
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_INTERRUPT_STATUS))));
   }
 
   /* ctrl refclkout */
