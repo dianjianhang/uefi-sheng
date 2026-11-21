@@ -13,6 +13,15 @@
   INF SiliciumPkg/Applications/UFP/ufpdevicefw.inf
 
   #
+  # UEFI Shell - interactive recovery console.
+  #
+  # MsBootPolicy falls back here when no bootable file system is found, which is
+  # the normal state on a platform whose storage driver is still being ported.
+  # It lets the platform be inspected on device (map -r, dh, memmap, ...).
+  #
+  INF ShellPkg/Application/Shell/Shell.inf
+
+  #
   # RAW Files
   #
 !if $(ENABLE_SECUREBOOT) == 1
