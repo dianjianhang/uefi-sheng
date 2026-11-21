@@ -31,10 +31,7 @@
   INF MediaTekPkg/Drivers/PmicWrapperDxe/PmicWrapperDxe.inf
   INF MediaTekPkg/Drivers/MT6358PmicDxe/MT6358PmicDxe.inf
 
-  INF MediaTekPkg/Drivers/MsdcDxe/MsdcDxe.inf
 
-  INF MdeModulePkg/Bus/Sd/EmmcDxe/EmmcDxe.inf
-  INF MdeModulePkg/Bus/Sd/SdDxe/SdDxe.inf
 
 !if $(USE_CUSTOM_DISPLAY_DRIVER) == 0
   INF SiliciumPkg/Drivers/SimpleFbDxe/SimpleFbDxe.inf
