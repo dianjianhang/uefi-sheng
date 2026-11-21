@@ -18,6 +18,27 @@
 
 #include "Sec.h"
 
+// --- PROBE ONLY: on-screen stage markers so one photo shows how far SEC got ---
+STATIC
+VOID
+SecStageMarker (
+  IN UINT32 Color,
+  IN UINT32 Row
+  )
+{
+  volatile UINT32 *Fb    = (volatile UINT32 *)0xFCC20000;
+  CONST UINTN      Pitch = 1248;   // pixels per line; matches PcdFrameBufferWidth
+  UINTN            Y0    = (UINTN)Row * 24;
+
+  for (UINTN Y = Y0; Y < Y0 + 20; Y++) {
+    for (UINTN X = 0; X < 240; X++) {
+      Fb[Y * Pitch + X] = Color;
+    }
+  }
+
+  WriteBackInvalidateDataCacheRange ((VOID *)0xFCC20000, (UINTN)Pitch * 2712 * 4);
+}
+
 // First argument (x0) of the previous stage, saved by ModuleEntryPoint.S
 extern UINT64  gSecEntryArg0;
 
@@ -78,6 +99,8 @@ PrintFirmwareVersion (VOID)
   // Clear Frame Buffer
   ClearFrameBuffer ();
 
+  SecStageMarker (0x0000FF00, 2);   // PROBE: ClearFrameBuffer done (green)
+
   // Print UEFI Version Message
   DEBUG ((EFI_D_WARN, "\n"));
   DEBUG ((EFI_D_WARN, "Project Silicium for %a %a\n",            FixedPcdGetPtr (PcdSmbiosSystemManufacturer), FixedPcdGetPtr (PcdSmbiosSystemModel)));
@@ -130,8 +153,12 @@ SecMain (VOID)
 {
   EFI_STATUS Status;
 
+  SecStageMarker (0x00FF00FF, 0);   // PROBE: SecMain entered (magenta)
+
   // Do Platform Specific Initialization
   PlatformInitialize ();
+
+  SecStageMarker (0x00FFFF00, 1);   // PROBE: PlatformInitialize done (yellow)
 
 #ifndef MDEPKG_NDEBUG
   // Initialize Serial Port
@@ -153,6 +180,8 @@ SecMain (VOID)
   if (EFI_ERROR (Status)) {
     return;
   }
+
+  SecStageMarker (0x0000FFFF, 3);   // PROBE: InitializeMemory done (cyan)
 
   DEBUG ((EFI_D_WARN, "SEC: memory HOBs done\n"));
 
@@ -189,15 +218,21 @@ SecMain (VOID)
   DEBUG ((EFI_D_WARN, "SEC: constructor lzma\n"));
   LzmaDecompressLibConstructor ();
   DEBUG ((EFI_D_WARN, "SEC: constructors done\n"));
+
+  SecStageMarker (0x00FF0000, 4);   // PROBE: constructors done (blue)
   CheckHobList ();
 
   // Decompress all FVs
   Status = DecompressFirstFv ();
   DEBUG ((EFI_D_WARN, "SEC: FV decompressed (%r)\n", Status));
+
+  SecStageMarker (0x00FFFFFF, 5);   // PROBE: FV decompressed (white)
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "Failed to Decompress FV! Status = %r\n", Status));
     return;
   }
+
+  SecStageMarker (0x00FF8000, 6);   // PROBE: about to load DXE core (orange)
 
   // Load DXE Core
   DEBUG ((EFI_D_WARN, "SEC: loading DXE core\n"));
