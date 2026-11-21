@@ -30,8 +30,9 @@
 #define MT6899_UFS_CFG_PDN_BASE 0x112BB000UL  // syscon@112bb000 ufscfg_pdn
 
 //
-// MT6899 UFS clock gates (from Linux clk-mt6899-peri.c, gate regs setclr):
-//   ufscfg_ao  +0x8 SET / +0xC CLR / +0x4 STA, value 1 enables the gate.
+// MT6899 UFS clock gates (from Linux clk-mt6899-peri.c, mtk_clk_gate_ops_setclr):
+//   ufscfg_ao  +0x8 SET / +0xC CLR / +0x4 STA.  Gate is ACTIVE-LOW:
+//   writing 1 to CLR (+0xC) enables the clock; STA bit == 0 means enabled.
 //   ufscfg_pdn +0x8 SET / +0xC CLR / +0x4 STA (same layout).
 //
 // ufsao_clks:  bit3  unipro_sys   (parent ufs_ck)
@@ -165,17 +166,23 @@ Mt6899ClockEnable (
   // configured ufs_ck before it loaded us (the HCI registers are readable),
   // and re-selecting its parent would risk switching to a wrong clock source.
 
+  //
+  // mtk_clk_gate_ops_setclr is ACTIVE-LOW: enable = mtk_cg_clr_bit(), i.e.
+  // write 1 to the CLR register (+0xC); "enabled" means STA bit == 0.
+  // v8 wrote the SET register (+0x8), which GATED all UFS clocks off -- that
+  // is why HCI regs read back all 0.  v9 writes CLR (+0xC) instead.
+  //
   // ufscfg_ao: unipro_sys, phy_sap (26 MHz PHY ref), phy_ahb_s_busck.
-  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_SET_OFFSET), UFSAO_CLK_MASK);
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_CLR_OFFSET), UFSAO_CLK_MASK);
   // ufscfg_pdn: ufshci_ufs, ufshci_aes, ufshci_u_ahb.
-  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_SET_OFFSET), UFSPDN_CLK_MASK);
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_CLR_OFFSET), UFSPDN_CLK_MASK);
   MicroSecondDelay (100);
 
   StaAo  = MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_STA_OFFSET));
   StaPdn = MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_STA_OFFSET));
 
-  DEBUG ((DEBUG_ERROR, "UFS CLK AO=%08x want=%08x PDN=%08x want=%08x\n",
-    StaAo, UFSAO_CLK_MASK, StaPdn, UFSPDN_CLK_MASK));
+  DEBUG ((DEBUG_ERROR, "UFS CLK AO=%08x want=0 PDN=%08x want=0\n",
+    StaAo & UFSAO_CLK_MASK, StaPdn & UFSPDN_CLK_MASK));
 }
 
 /**
