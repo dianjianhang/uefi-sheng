@@ -38,6 +38,18 @@ MU_PATH            = Path ("Common/Mu")
 MU_OEM_SAMPLE_PATH = Path ("Common/Mu_OEM_Sample")
 MU_BASECORE_PATH   = Path ("Mu_Basecore")
 
+#
+# Patches that target a submodule other than Mu_Basecore.
+# PcBdsPkg (and therefore MsBootPolicy) only exists in Common/Mu.
+#
+PATCH_TARGET_PATHS = {
+    "Shell-Fallback.patch": MU_PATH,
+}
+
+def patch_target_path (patch_name: str):
+    return PATCH_TARGET_PATHS.get (patch_name, MU_BASECORE_PATH)
+
+
 @dataclass
 class BuildContext:
     device:            str
@@ -493,7 +505,7 @@ def main ():
 
     # Remove Mu_Basecore Patches
     for patch_name in ["AsmMacroLib.patch", "Auth-Service.patch", "Boot-Manager.patch", "Shell-Fallback.patch", "Timer.patch", "Usb-Bus.patch"]:
-        handle_git_patch (MU_BASECORE_PATH, patch_name, True)
+        handle_git_patch (patch_target_path (patch_name), patch_name, True)
 
     # Update Local Repo
     if ctx.update:
@@ -514,7 +526,7 @@ def main ():
 
     # Apply Mu_Basecore Patches
     for patch_name in ["AsmMacroLib.patch", "Auth-Service.patch", "Boot-Manager.patch", "Shell-Fallback.patch", "Timer.patch", "Usb-Bus.patch"]:
-        if not handle_git_patch (MU_BASECORE_PATH, patch_name, False):
+        if not handle_git_patch (patch_target_path (patch_name), patch_name, False):
             logger.error (f"Failed to Apply \"{patch_name}\" Git Patch!")
             sys.exit (1)
 
