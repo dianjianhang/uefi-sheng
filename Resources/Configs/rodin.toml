@@ -8,8 +8,8 @@ requires_kernel_header = true
 # PROBE BUILD: use the diagnostic shim. It paints the top of the framebuffer
 # white, holds PROBE_DELAY_S seconds, then PSCI-resets, so a plain white screen
 # proves the bootloader reached our code (independent of UEFI progress).
-source  = "BootShimHang.S"
-defines = "-DFB_BASE=0xFCC20000 -DFB_FILL=0xE00000 -DWD_BASE=0x1C00B000 -DWD_KEY=0x22000000"
+source  = "BootShimProbe.S"
+defines = "-DFB_BASE=0xFCC20000 -DFB_FILL=0xE00000 -DPROBE_RESET=0"
 
 #
 # UEFI FD Configs
