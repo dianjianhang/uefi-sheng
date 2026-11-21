@@ -1,0 +1,121 @@
+--- a/PcBdsPkg/MsBootPolicy/MsBootPolicy.c
++++ b/PcBdsPkg/MsBootPolicy/MsBootPolicy.c
+@@ -6,6 +6,8 @@
+ **/
+ 
+ #include "MsBootPolicy.h"
++
++#include <Protocol/Shell.h>
+ 
+ #define USB_DRIVE_SECOND_CHANCE_DELAY_S  6
+ 
+@@ -572,6 +574,84 @@
+ }
+ 
+ /**
++  Fall back to the built-in UEFI Shell when no bootable file system exists.
++
++  On a freshly ported platform the storage driver may not be functional yet, so
++  MsBootPolicy finds neither an internal disk nor a USB drive. Rather than
++  sitting on an error screen forever, hand control to the Shell so the platform
++  can still be inspected interactively (map -r, dh, memmap, ...).
++
++**/
++STATIC
++EFI_STATUS
++BootToShellFallback (
++  VOID
++  )
++{
++  EFI_STATUS                Status;
++  EFI_DEVICE_PATH_PROTOCOL  *ShellPath;
++  EFI_HANDLE                ShellHandle;
++  EFI_HANDLE                *Handles;
++  UINTN                     HandleCount;
++  UINTN                     Index;
++  STATIC CHAR16             ShellName[] = L"shell.efi";
++
++  //
++  // The Shell may already be resident as a DXE driver. If so its
++  // gEfiShellProtocolGuid instance exists and can be started directly.
++  //
++  Handles     = NULL;
++  HandleCount = 0;
++  Status      = gBS->LocateHandleBuffer (
++                       ByProtocol,
++                       &gEfiShellProtocolGuid,
++                       NULL,
++                       &HandleCount,
++                       &Handles
++                       );
++  if (!EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_WARN, "No bootable device found - starting resident UEFI Shell\n"));
++    for (Index = 0; Index < HandleCount; Index++) {
++      EFI_LOADED_IMAGE_PROTOCOL  *LoadedImage;
++
++      Status = gBS->HandleProtocol (
++                      Handles[Index],
++                      &gEfiLoadedImageProtocolGuid,
++                      (VOID **)&LoadedImage
++                      );
++      if (!EFI_ERROR (Status) && (LoadedImage != NULL)) {
++        Status = gBS->StartImage (LoadedImage->ImageHandle, NULL, NULL);
++        DEBUG ((DEBUG_ERROR, "UEFI Shell returned - %r\n", Status));
++      }
++    }
++
++    gBS->FreePool (Handles);
++    return EFI_SUCCESS;
++  }
++
++  //
++  // Otherwise locate shell.efi on any file system that does exist.
++  //
++  ShellHandle = NULL;
++  ShellPath   = FileDevicePath (NULL, ShellName);
++  if (ShellPath == NULL) {
++    DEBUG ((DEBUG_ERROR, "Shell fallback: cannot build device path\n"));
++    return EFI_OUT_OF_RESOURCES;
++  }
++
++  DEBUG ((DEBUG_WARN, "No bootable device found - trying shell.efi\n"));
++  Status = gBS->LoadImage (FALSE, gImageHandle, ShellPath, NULL, 0, &ShellHandle);
++  gBS->FreePool (ShellPath);
++  if (!EFI_ERROR (Status)) {
++    Status = gBS->StartImage (ShellHandle, NULL, NULL);
++  } else {
++    DEBUG ((DEBUG_ERROR, "Shell fallback: LoadImage failed - %r\n", Status));
++  }
++
++  return Status;
++}
++
++/**
+   Entry to Ms Boot Policy.
+ 
+   @param ImageHandle     The image handle.
+@@ -706,6 +786,14 @@
+     Index++;
+   }
+ 
++  //
++  // Nothing bootable was found. Drop to the Shell instead of staying on the
++  // "no boot device" screen, so the platform can still be debugged on device.
++  //
++  if (EFI_ERROR (Status)) {
++    Status = BootToShellFallback ();
++  }
++
+   // Need to populate GraphicStatus here, otherwise logo function return value will override boot result
+   GraphicStatus = SetGraphicsConsoleMode (GCM_NATIVE_RES);
+   if (EFI_ERROR (GraphicStatus) != FALSE) {
+--- a/PcBdsPkg/MsBootPolicy/MsBootPolicy.inf
++++ b/PcBdsPkg/MsBootPolicy/MsBootPolicy.inf
+@@ -57,6 +57,7 @@
+   gEfiSimpleFileSystemProtocolGuid
+   gEfiLoadFileProtocolGuid
+   gEfiLoadedImageProtocolGuid
++  gEfiShellProtocolGuid
+ 
+ [FeaturePcd]
+ 
