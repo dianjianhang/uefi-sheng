@@ -188,13 +188,20 @@ def compile_boot_shim (boot_shim_config: dict, fd_config: dict) -> bool:
     # Get Kernel Header Flag
     requires_kernel_header = boot_shim_config.get ("requires_kernel_header", False)
 
+    # Optional bring-up probe: alternate source + extra -D defines
+    src   = boot_shim_config.get ("source", "BootShim.S")
+    extra = boot_shim_config.get ("defines", "")
+
     # Set Compile Command
     cmd = [
         "make",
         f"REQUIRES_KERNEL_HEADER={int (requires_kernel_header)}",
         f"FD_BASE={fd_base}",
-        f"FD_SIZE={fd_size}"
+        f"FD_SIZE={fd_size}",
+        f"SRC={src}"
     ]
+    if extra:
+        cmd.append (f"EXTRA_DEFS={extra}")
 
     # Compile Boot Shim
     return subprocess.run (cmd, cwd=BOOT_SHIM_PATH).returncode == 0
