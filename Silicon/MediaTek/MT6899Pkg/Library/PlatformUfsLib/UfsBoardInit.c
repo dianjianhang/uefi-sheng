@@ -123,6 +123,66 @@
 //
 STATIC UINT32  mVsScratch[0x400 / sizeof (UINT32)];
 
+//
+// MediaTek SiP SMC for UFS (from ufs-mediatek-sip.h).
+//   MTK_SIP_UFS_CONTROL = ARM_SMCCC_CALL_VAL(FAST_CALL, SMC_64,
+//                          OWNER_SIP(2), 0x276)
+//                       = 0xC2000276
+//   cmd: MTCMOS_CTRL = BIT9 (0x200), MPHY_CTRL = BIT8 (0x100)
+//   arg1 (v1): MTCMOS on/off (1=on), MPHY op (0=BACKUP,1=RESTORE)
+//
+#define MTK_SIP_UFS_CONTROL     0xC2000276ULL
+#define UFS_SIP_MTCMOS_CTRL     0x200ULL
+#define UFS_SIP_MPHY_CTRL       0x100ULL
+#define UFS_MTCMOS_ON           1ULL
+#define UFS_MPHY_RESTORE        1ULL
+
+STATIC
+UINT64
+Mt6899UfsSipSmc (
+  IN UINT64 Cmd,
+  IN UINT64 Arg1
+  )
+{
+  UINT64 X0 = MTK_SIP_UFS_CONTROL;
+  UINT64 X1 = Cmd;
+  UINT64 X2 = Arg1;
+  UINT64 X3 = 0;
+
+  __asm__ volatile ("smc #0"
+    : "+r" (X0), "+r" (X1), "+r" (X2), "+r" (X3)
+    :
+    : "memory", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+      "x12", "x13", "x14", "x15", "x16", "x17");
+  return X0;
+}
+
+/**
+   Power on the UFS MTCMOS power domain and restore the MPHY calibration.
+
+   Linux ufs_mtk_init() (drivers/ufs/host/ufs-mediatek.c) does exactly this
+   when the DT has "mediatek,ufs-rtff-mtcmos" -- which rodin.dtb does.  Without
+   it the MPHY analog block stays unpowered and every write to 0x112A0000
+   reads back 0 (the v9 symptom), even with all clock gates enabled.
+**/
+STATIC
+VOID
+Mt6899MtcmosOn (
+  VOID
+  )
+{
+  UINT64 Rmt;
+  UINT64 Rmp;
+
+  // MTCMOS power domain on (Linux: ufs_mtk_mtcmos_ctrl(true, res)).
+  Rmt = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_ON);
+  // Restore MPHY settings after power-on (ufs_mtk_mphy_ctrl(RESTORE, res)).
+  Rmp = Mt6899UfsSipSmc (UFS_SIP_MPHY_CTRL, UFS_MPHY_RESTORE);
+
+  DEBUG ((DEBUG_ERROR, "UFS SMC MTCMOS ret=%lx MPHY rst ret=%lx\n",
+    (UINTN)Rmt, (UINTN)Rmp));
+}
+
 STATIC
 VOID
 MphySetBits (
@@ -146,12 +206,10 @@ MphyClearBits (
 /**
    Enable every clock the UFS controller, UniPro and MPHY need.
 
-   Ported from Linux clk-mt6899-peri.c (ufsao/ufspdn gate clks) and the
-   TOP_UFS_SEL mux-gate in ClockImplLib.  MediaTek clk gates use the set/clr
-   register pair: writing 1 to the SET register enables the clock, and the
-   STA register reports the current state.  These gates are OFF after the
-   bootloader hands off, which is why MPHY MMIO writes read back as 0 in v7
-   and DME_LINK_STARTUP always failed with arg2=1.
+   Ported from Linux clk-mt6899-peri.c (ufsao/ufspdn gate clks).  These
+   mtk_clk_gate_ops_setclr gates are ACTIVE-LOW: writing 1 to CLR (+0xC)
+   enables the clock and STA bit==0 means enabled.  Gates are OFF after
+   bootloader handoff, so MPHY/HCI MMIO would read back 0 if left gated.
 **/
 STATIC
 VOID
@@ -357,11 +415,18 @@ UfsBoardInit (
   }
 
   //
-  // CRITICAL (v8 root-cause fix): enable the UFS clock gates FIRST.
+  // v10: power on the UFS MTCMOS domain + restore MPHY calibration via SiP SMC.
+  // rodin.dtb has "mediatek,ufs-rtff-mtcmos"; Linux ufs_mtk_init() does this
+  // and without it the MPHY analog block stays off (MPHY regs read 0 in v9).
+  //
+  Mt6899MtcmosOn ();
+
+  //
+  // CRITICAL (v8 root-cause fix): enable the UFS clock gates.
   // On MT6899 the ufscfg_ao/ufscfg_pdn gates are OFF after bootloader handoff.
   // Without phy_sap (26 MHz PHY reference) and phy_ahb_s_busck, every MPHY
-  // MMIO write is dropped by the bus and reads back as 0 (exactly the v7
-  // symptom: 8C/9C/AC/44 all 0).  Mirror Linux clk-mt6899-peri.c + ufs_mtk_init.
+  // MMIO write is dropped by the bus and reads back as 0.  Mirror Linux
+  // clk-mt6899-peri.c + ufs_mtk_init.
   //
   Mt6899ClockEnable ();
 
