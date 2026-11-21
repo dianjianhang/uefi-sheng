@@ -1438,12 +1438,16 @@ InitUfsDriver (
   IN EFI_SYSTEM_TABLE *SystemTable)
 {
   EFI_STATUS Status;
+  UINT32     Installed = 0;
   struct UfsHost *Ufs = UfsAllocHost();
+
+  DEBUG ((EFI_D_ERROR, "### UFSDIAG: InitUfsDriver ENTER ###\n"));
 
   Status = gBS->LocateProtocol (&gEfiChipInfoProtocolGuid, NULL, (VOID *)&mChipInfoProtocol);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "Failed to Locate Chip Info Protocol! Status = %r\n", Status));
-    return Status;
+    DEBUG ((EFI_D_ERROR, "### UFSDIAG: chipinfo-fail HALT ###\n"));
+    while (TRUE) { gBS->Stall (1000000); }
   }
 
   if (!Ufs) {
@@ -1454,13 +1458,15 @@ InitUfsDriver (
   Status = UfsInitHost(Ufs);
   if (EFI_ERROR(Status)) {
     DEBUG((EFI_D_ERROR, "Failed to initialize UFS host\n"));
-    return Status;
+    DEBUG((EFI_D_ERROR, "### UFSDIAG: host-fail st=%r HALT ###\n", Status));
+    while (TRUE) { gBS->Stall (1000000); }
   }
 
   Status = UfsInitInterface(Ufs);
   if (EFI_ERROR(Status)) {
     DEBUG((EFI_D_ERROR, "Failed to initialize UFS interface\n"));
-    return Status;
+    DEBUG((EFI_D_ERROR, "### UFSDIAG: interface-fail st=%r HALT ###\n", Status));
+    while (TRUE) { gBS->Stall (1000000); }
   }
 
   if (!UfsUtpQueryRetry (Ufs, ATTR_R_BOOTLUNEN, 0)) {
@@ -1539,8 +1545,15 @@ InitUfsDriver (
     else
     {
       DEBUG ((EFI_D_ERROR, "UFS LUN %d DiskIO Protocol installed\n", Lun));
+      Installed++;
     }
   }
+
+  if (Installed == 0) {
+    DEBUG ((EFI_D_ERROR, "### UFSDIAG: 0 LUN block-io installed, HALT ###\n"));
+    while (TRUE) { gBS->Stall (1000000); }
+  }
+  DEBUG ((EFI_D_ERROR, "### UFSDIAG: %d LUN block-io installed, continue boot ###\n", Installed));
 
   return EFI_SUCCESS;
 }
