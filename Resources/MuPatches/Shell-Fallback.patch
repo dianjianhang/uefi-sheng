@@ -1,3 +1,5 @@
+diff --git a/PcBdsPkg/MsBootPolicy/MsBootPolicy.c b/PcBdsPkg/MsBootPolicy/MsBootPolicy.c
+index 25ac988f0f..936b48ee63 100644
 --- a/PcBdsPkg/MsBootPolicy/MsBootPolicy.c
 +++ b/PcBdsPkg/MsBootPolicy/MsBootPolicy.c
 @@ -6,6 +6,8 @@
@@ -109,6 +111,8 @@
    // Need to populate GraphicStatus here, otherwise logo function return value will override boot result
    GraphicStatus = SetGraphicsConsoleMode (GCM_NATIVE_RES);
    if (EFI_ERROR (GraphicStatus) != FALSE) {
+diff --git a/PcBdsPkg/MsBootPolicy/MsBootPolicy.inf b/PcBdsPkg/MsBootPolicy/MsBootPolicy.inf
+index 430550d01e..fb52f05eaa 100644
 --- a/PcBdsPkg/MsBootPolicy/MsBootPolicy.inf
 +++ b/PcBdsPkg/MsBootPolicy/MsBootPolicy.inf
 @@ -57,6 +57,7 @@
