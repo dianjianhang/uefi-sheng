@@ -5,6 +5,9 @@
 #
 [boot_shim]
 requires_kernel_header = true
+# TEMP bring-up probe: paint FB + PSCI reset loop to prove BootShim runs
+source = "BootShimProbe.S"
+defines = "-DPROBE_RESET=1 -DPROBE_DELAY_S=8 -DFB_BASE=0xFCC20000 -DFB_FILL=0x100000"
 
 #
 # UEFI FD Configs
