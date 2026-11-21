@@ -36,10 +36,11 @@
   gArmPlatformTokenSpaceGuid.PcdClusterCount|1
 
   #
-  # GICv3 - distributor 0x0C000000 (gic500@c000000), CPU interface 0x0C400000 (gic-cpu@c400000)
-  #
-  gArmTokenSpaceGuid.PcdGicDistributorBase|0x0C000000
-  gArmTokenSpaceGuid.PcdGicRedistributorsBase|0x0C400000
+  # GICv3 - live /proc/iomem and vendor DTB interrupt-controller@c400000:
+  #   GICD 0x0C400000 (len 0x40000), GICR 0x0C440000 (len 0x200000).
+  #   (0x0C000000/0x0C400000 are the MT6789 values and are WRONG on MT6899.)
+  gArmTokenSpaceGuid.PcdGicDistributorBase|0x0C400000
+  gArmTokenSpaceGuid.PcdGicRedistributorsBase|0x0C440000
 
   #
   # SMBIOS
