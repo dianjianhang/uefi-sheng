@@ -815,7 +815,12 @@ UfsPreSetup (
     MmioWrite32((UINTN)(Ufs->VsAddr + VS_FORCE_HCS), 0);
 
   MmioWrite32((UINTN)(Ufs->VsAddr + VS_SW_RST), 3);
-  while (MmioRead32((UINTN)(Ufs->VsAddr + VS_SW_RST))); // Wait for reset
+  {
+    UINT32 SwRstRetry = 10000;
+    while (MmioRead32((UINTN)(Ufs->VsAddr + VS_SW_RST)) != 0 && --SwRstRetry != 0) {
+      MicroSecondDelay (10);
+    }
+  }
 
   /* VENDOR_SPECIFIC_IS[20] : clear UFS_IDLE_Indicator bit (if UFS_LINK is reset, this bit is asserted) */
   Register = MmioRead32((UINTN)(Ufs->VsAddr + VS_IS));
@@ -830,8 +835,16 @@ UfsPreSetup (
   // Send reset host command and enable command when that quirk is present.
 
   MmioWrite32((UINTN)(Ufs->IoAddr + REG_CONTROLLER_ENABLE), 1);
-  while(!(MmioRead32((UINTN)(Ufs->IoAddr + REG_CONTROLLER_ENABLE)) & 1))
-    MicroSecondDelay(1);
+  {
+    UINT32 HceRetry = 100000;
+    while (!(MmioRead32((UINTN)(Ufs->IoAddr + REG_CONTROLLER_ENABLE)) & 1)) {
+      if (--HceRetry == 0) {
+        DEBUG ((EFI_D_ERROR, "UFS: HCE enable timeout\n"));
+        break;
+      }
+      MicroSecondDelay (10);
+    }
+  }
 
   /* ctrl refclkout */
   MmioWrite32((UINTN)(Ufs->VsAddr + VS_CLKSTOP_CTRL), MmioRead32((UINTN)(Ufs->VsAddr + VS_CLKSTOP_CTRL)) & ~(1 << 4));

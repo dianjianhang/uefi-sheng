@@ -68,6 +68,15 @@
 #define UFS_MCLK_RATE          403000000UL   // ufs_sel max on rodin DTB
 #define UFS_GEAR_MODE          4
 
+//
+// Backing store for the Exynos-only vendor register block that the generic
+// UfsDxe pokes through VsAddr / DevPwrAddr / PhyIsoAddr.  The highest VS_*
+// offset used is 0x114 (VS_MPHY_REFCLK_SEL), so 0x400 bytes is ample.  Static
+// storage starts zeroed and stays writable, so reads return 0 and writes are
+// harmlessly discarded instead of hitting real (or absent) hardware.
+//
+STATIC UINT32  mVsScratch[0x400 / sizeof (UINT32)];
+
 STATIC
 VOID
 MphySetBits (
@@ -179,20 +188,25 @@ UfsBoardInit (
   DEBUG ((DEBUG_INFO, "UFS: MT6899 board init\n"));
 
   //
-  // Register windows. MediaTek places its vendor registers in the UFSHCI
-  // window, so VsAddr deliberately aliases IoAddr.
+  // Real register windows.  All standard UFSHCI access (UIC / UTP / HCE) goes
+  // through IoAddr; the MPHY is reached through PhyPma.
   //
   Ufs->IoAddr      = (VOID *)(UINTN)MT6899_UFS_HCI_BASE;
-  Ufs->VsAddr      = (VOID *)(UINTN)MT6899_UFS_HCI_BASE;
   Ufs->UniProAddr  = (VOID *)(UINTN)MT6899_UFS_HCI_BASE;
   Ufs->PhyPma      = (VOID *)(UINTN)MT6899_UFS_PHY_BASE;
 
   //
-  // No Exynos-style PMU / isolation registers on MediaTek.
+  // MediaTek has no Exynos PMU / isolation / vendor-register block, and the
+  // Samsung VS_* offsets (0x000..0x114) would alias real UFSHCI registers if
+  // VsAddr pointed at the host window.  Redirect VsAddr / DevPwrAddr /
+  // PhyIsoAddr at a private zeroed RAM page so the generic Exynos code runs
+  // without faulting (PhyIsoAddr == NULL previously caused a FAR=0 data abort)
+  // and without corrupting the controller.
   //
-  Ufs->DevPwrAddr  = NULL;
+  Ufs->VsAddr      = (VOID *)mVsScratch;
+  Ufs->DevPwrAddr  = (VOID *)mVsScratch;
   Ufs->DevPwrShift = 0;
-  Ufs->PhyIsoAddr  = NULL;
+  Ufs->PhyIsoAddr  = (VOID *)mVsScratch;
 
   Ufs->MclkRate    = UFS_MCLK_RATE;
   Ufs->GearMode    = UFS_GEAR_MODE;
