@@ -32,6 +32,7 @@
 //
 #define REG_UFS_XOUFS_CTRL     0x140
 #define REG_UFS_REFCLK_CTRL    0x144
+#define REG_UFS_UFS_MMIO_OTSD_CTRL 0x14C
 #define REG_UFS_MMIO_OPT_CTRL0 0x160
 
 //
@@ -252,6 +253,36 @@ UfsBoardInit (
   Ufs->GearMode    = UFS_GEAR_MODE;
 
   //
+  // Report the bootloader hand-off state before touching any hardware.
+  // OTSD_CTRL bits[31:24] carry the UniPro link state on MT6899
+  // (VS_LINK_UP == 2), per ufs_mtk_wait_link_state().
+  //
+  {
+    UINT32 Ot = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + REG_UFS_UFS_MMIO_OTSD_CTRL);
+
+    DEBUG ((DEBUG_ERROR, "UFS BI entry OTSD=0x%08x LNK=%d HCS=0x%08x HCE=0x%08x\n",
+      Ot, (Ot >> 24) & 0xFF,
+      MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x30),
+      MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x34)));
+
+    if (((Ot >> 24) & 0xFF) == 2) {
+      //
+      // The bootloader already has the UFS link up (it read boot_a from UFS to
+      // load us).  Re-running MPHY power-on / host reset / LINK_STARTUP on a
+      // live link makes DME_LINK_STARTUP return FAILURE (arg2=1), which is what
+      // every prior build hit.  Take over the working link untouched.
+      //
+      DEBUG ((DEBUG_ERROR, "UFS: link UP at entry -> warm takeover, skip re-init\n"));
+      DEBUG ((DEBUG_ERROR, "UFS MPHY 8C=%08x 9C=%08x AC=%08x 44=%08x\n",
+        MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C),
+        MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_9C),
+        MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_AC),
+        MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_RX_44)));
+      return EFI_SUCCESS;
+    }
+  }
+
+  //
   // Bring up the MPHY analog, then the reference clock, exactly as Linux
   // ufs_mtk_init() does (mphy_power_on -> setup_clocks/ref_clk) *before* the
   // host reset carried out in ufs_mtk_hce_enable_notify().
@@ -300,16 +331,27 @@ UfsBoardInit (
 
   //
   // Diagnostics (ERROR level so it survives any DebugLib print-level filter).
+  // Split into short lines so nothing wraps off the phone screen.
   //
-  DEBUG ((DEBUG_ERROR,
-    "UFS: board init: VER=0x%08x MTKIPVER=0x%08x XOUFS=0x%08x OPT0=0x%08x "
-    "REFCLK=0x%08x HCS=0x%08x\n",
+  DEBUG ((DEBUG_ERROR, "UFS BI1 VER=%08x IPVER=%08x\n",
     MmioRead32 ((UINTN)Ufs->IoAddr + 0x00),
-    MmioRead32 ((UINTN)Ufs->IoAddr + 0x2240),
+    MmioRead32 ((UINTN)Ufs->IoAddr + 0x2240)));
+  DEBUG ((DEBUG_ERROR, "UFS BI2 XOUFS=%08x OPT0=%08x\n",
     MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_XOUFS_CTRL),
-    MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_MMIO_OPT_CTRL0),
+    MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_MMIO_OPT_CTRL0)));
+  DEBUG ((DEBUG_ERROR, "UFS BI3 REFCLK=%08x HCS=%08x HCE=%08x\n",
     MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_REFCLK_CTRL),
-    MmioRead32 ((UINTN)Ufs->IoAddr + 0x30)));
+    MmioRead32 ((UINTN)Ufs->IoAddr + 0x30),
+    MmioRead32 ((UINTN)Ufs->IoAddr + 0x34)));
+  DEBUG ((DEBUG_ERROR, "UFS BI4 MPHY 8C=%08x 9C=%08x AC=%08x 44=%08x\n",
+    MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C),
+    MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_9C),
+    MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_AC),
+    MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_RX_44)));
+  {
+    UINT32 Ot = MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_UFS_MMIO_OTSD_CTRL);
+    DEBUG ((DEBUG_ERROR, "UFS BI5 post OTSD=%08x LNK=%d\n", Ot, (Ot >> 24) & 0xFF));
+  }
 
   DEBUG ((DEBUG_INFO, "UFS: MT6899 board init done (hci=0x%lx phy=0x%lx)\n",
           (UINTN)MT6899_UFS_HCI_BASE, (UINTN)MT6899_UFS_PHY_BASE));

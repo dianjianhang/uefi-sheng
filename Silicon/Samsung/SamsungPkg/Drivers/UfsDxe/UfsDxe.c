@@ -248,9 +248,16 @@ UfsSendUicCmd (struct UfsHost *Ufs)
 
   if (ErrorCode != 0 || Error != UFS_NO_ERROR) {
     DEBUG ((EFI_D_ERROR,
-      "UFS: UIC cmd 0x%02x failed arg1=0x%08x arg2=0x%08x err=%d IS=0x%08x\n",
-      Ufs->UicCmd->uiccmdr, Ufs->UicCmd->Arg1, ErrorCode, Error,
-      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_INTERRUPT_STATUS))));
+      "UFS UICfail cmd=%02x arg1=%08x arg2=%08x err=%d\n",
+      Ufs->UicCmd->uiccmdr, Ufs->UicCmd->Arg1, ErrorCode, Error));
+    DEBUG ((EFI_D_ERROR, "UFS E1 PA=%08x DL=%08x NL=%08x\n",
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER)),
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_DATA_LINK_LAYER)),
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_NETWORK_LAYER))));
+    DEBUG ((EFI_D_ERROR, "UFS E2 TL=%08x DME=%08x UPMCRS=%d\n",
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_TRANSPORT_LAYER)),
+      MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_DME)),
+      (int)UPMCRS (MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS)))));
   }
 
   return ErrorCode | Error;
@@ -983,11 +990,54 @@ UfsInitInterface (
 
   DEBUG((EFI_D_INFO, "UFS pre-link pass\n"));
 
-  Ufs->UicCmd = &LinkCmd;
-  if(UfsSendUicCmd(Ufs))
+  //
+  // Link start-up.  If the bootloader already left the UniPro link up (it read
+  // boot_a from UFS to load us), DME_LINK_STARTUP returns FAILURE (arg2=1) on a
+  // live link.  Detect that from OTSD_CTRL bits[31:24] (VS_LINK_UP==2) and take
+  // over the working link instead of restarting it.  Otherwise retry startup a
+  // few times (ufs-mediatek does the same) and dump per-layer UIC error codes.
+  //
   {
-    DEBUG((EFI_D_ERROR, "UFS link startup failed\n"));
-    return EFI_DEVICE_ERROR;
+    INTN   Attempt;
+    INT32  LnkErr = UFS_ERROR;
+    UINT32 Ot     = MmioRead32 ((UINTN)(Ufs->IoAddr + 0x14C));
+    UINT32 Lnk    = (Ot >> 24) & 0xFF;
+
+    DEBUG ((EFI_D_ERROR, "UFS pre-lnk OTSD=%08x LNK=%d HCS=%08x\n",
+      Ot, Lnk, MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS))));
+
+    if (Lnk == 2) {
+      DEBUG ((EFI_D_ERROR, "UFS link already up -> skip DME_LINK_STARTUP\n"));
+      LnkErr = 0;
+    } else {
+      for (Attempt = 0; Attempt < 8; Attempt++) {
+        LinkCmd.uiccmdr = UIC_CMD_DME_LINK_STARTUP;
+        LinkCmd.Arg1    = 0;
+        LinkCmd.Arg2    = 0;
+        LinkCmd.Arg3    = 0;
+        Ufs->UicCmd = &LinkCmd;
+
+        LnkErr = UfsSendUicCmd (Ufs);
+        if (LnkErr == 0) {
+          break;
+        }
+
+        Ot  = MmioRead32 ((UINTN)(Ufs->IoAddr + 0x14C));
+        DEBUG ((EFI_D_ERROR, "UFS lsa %d/8 err=%d OTSD=%08x LNK=%d\n",
+          Attempt + 1, LnkErr, Ot, (Ot >> 24) & 0xFF));
+
+        MicroSecondDelay (2000);
+
+        if (Attempt + 1 < 8) {
+          UfsPreLink (Ufs, Ufs->CalParam->AvailableLane);
+        }
+      }
+    }
+
+    if (LnkErr != 0) {
+      DEBUG ((EFI_D_ERROR, "UFS link startup failed\n"));
+      return EFI_DEVICE_ERROR;
+    }
   }
 
   DEBUG ((EFI_D_INFO, "UFS link is up\n"));
