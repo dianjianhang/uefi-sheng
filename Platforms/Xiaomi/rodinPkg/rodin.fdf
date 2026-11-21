@@ -100,6 +100,11 @@ READ_LOCK_STATUS   = TRUE
 
   !include MediaTekPkg/Extra.fdf.inc
 
+  # UFS block-I/O (rodin storage = UFS 3.1). ChipInfo first so the protocol it
+  # provides exists before the UFS driver starts (UfsDxe also has a Depex on it).
+  INF MT6899Pkg/Drivers/ChipInfoDxe/ChipInfoDxe.inf
+  INF SamsungPkg/Drivers/UfsDxe/UfsDxe.inf
+
 [FV.FVMAIN_COMPACT]
 FvAlignment        = 8
 ERASE_POLARITY     = 1
