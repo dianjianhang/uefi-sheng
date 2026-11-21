@@ -45,7 +45,9 @@
   # Simple Frame Buffer
   # TODO(MT6899): panel geometry to be confirmed during display bring-up.
   #
-  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1220
+  # Hardware stride is 4992 bytes (AB24, width padded to 1248). FrameBufferSerialPortLib
+  # derives pitch = Width*4, so set Width=1248; the extra 28px fall in the non-visible pad.
+  gSiliciumPkgTokenSpaceGuid.PcdFrameBufferWidth|1248
   gSiliciumPkgTokenSpaceGuid.PcdFrameBufferHeight|2712
   gSiliciumPkgTokenSpaceGuid.PcdFrameBufferColorDepth|32
 
