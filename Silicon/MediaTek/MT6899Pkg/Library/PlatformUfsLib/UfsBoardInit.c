@@ -577,7 +577,6 @@ Mt6899ClockEnable (
     UINTN Base;
     UINTN Off;
     UINT32 V;
-    UINT32 Wt;
 
     // Print only non-zero registers so each value is easy to read on a photo.
     for (Base = 0; Base < 2; Base++) {
