@@ -180,13 +180,16 @@ UINT32  gMt6899SpmDiag[6];
 #define UFS_SIP_DEVICE_RESET    0x2ULL     // BIT(1)
 #define UFS_MTCMOS_ON           1ULL
 #define UFS_MTCMOS_OFF          0ULL
-#define UFS_MPHY_RESTORE        1ULL
 #define UFS_REFCLK_ON           1ULL
 #define UFS_REFCLK_OFF          0ULL
 #define UFS_SMC_PRE_CHANGE      0ULL
 #define UFS_SMC_POST_CHANGE     1ULL
 #define UFS_DEV_RESET_ASSERT    0ULL   // active-low
 #define UFS_DEV_RESET_DEASSERT  1ULL
+// Remaining MTK_SIP_UFS_CONTROL subcommands (ufs-mediatek-sip.h)
+#define UFS_SIP_VA09_PWR_CTRL   0x1ULL   // BIT(0)
+#define UFS_SIP_SRAM_PWR_CTRL   0x20ULL  // BIT(5)
+#define UFS_SIP_DEVICE_PWR_CTRL 0x80ULL  // BIT(7)
 
 STATIC
 UINT64
@@ -238,6 +241,26 @@ Mt6899SmcccVersion (
     : "memory", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
       "x12", "x13", "x14", "x15", "x16", "x17");
   return X0;
+}
+
+/**
+  Quick snapshot of the three UFS MMIO windows, used to see which SiP call
+  (if any) makes the MPHY / ufscfg windows come alive.
+**/
+STATIC
+VOID
+Mt6899PrintUfsWindows (
+  IN CONST CHAR8  *Tag
+  )
+{
+  DEBUG ((DEBUG_ERROR,
+    "UFS WIN %a HCI2240=%08x HCI2200=%08x MPHY8C=%08x AOSTA=%08x PDSTA=%08x\n",
+    Tag,
+    MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x2240),
+    MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x2200),
+    MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C),
+    MmioRead32 ((UINTN)MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_STA_OFFSET),
+    MmioRead32 ((UINTN)MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_STA_OFFSET)));
 }
 
 STATIC
@@ -374,29 +397,11 @@ Mt6899SpmProbeAndPowerPhy (
     gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
 
   //
-  // v24: both domains report PWR_ON|ACK with ISO=0, so SpmPowerOnDomain()
-  // returns early and never clears the SSYS control fields.  Photos show
-  // SEL_SPM_OR_SUB_PM=1, PWR_ON_OFF=1 and SRAM_DORMANT_PD=3 remain set.
-  // Clean those fields explicitly (without toggling PWR_ON) and report the
-  // UFS sleep/UniPro PDN SRAM controls, which may also be left powered down.
+  // v25: keep the SPM SSYS/SRAM-dormant bits exactly as handed off.
+  // v24 proved that clearing them (E2F3000D -> E200000D) also kills the
+  // UFSHCI vendor window (2200/2204/2240 all became 0).  Only report the
+  // related SRAM controls now; do not modify any SPM field.
   //
-  MmioWrite32 ((UINTN)SPM_POWERON_CONFIG_EN, ((UINT32)SPM_PROJECT_CODE << 16) | 1);
-  {
-    UINTN   Addr;
-    UINT32  Before;
-    UINT32  After;
-
-    for (Addr = MT6899_UFS0_PWR_CON_OFF; Addr <= MT6899_UFS0_PHY_PWR_CON_OFF;
-         Addr += (MT6899_UFS0_PHY_PWR_CON_OFF - MT6899_UFS0_PWR_CON_OFF)) {
-      Before = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Addr));
-      MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Addr),
-                 ~(UFS_SSYS_SEL_SPM_OR_SUB_PM | UFS_SSYS_PWR_ON_OFF |
-                   UFS_SSYS_RTFF_GRP_EN_MASK | UFS_SSYS_SRAM_DORMANT_MASK));
-      After = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Addr));
-      DEBUG ((DEBUG_ERROR, "UFS SPM forceclean 0x%lx %08x -> %08x\n",
-        Addr, Before, After));
-    }
-  }
   DEBUG ((DEBUG_ERROR, "UFS SPM sleep UFS_F0C=%08x UNIPRO_F10=%08x MSB=%08x/%08x\n",
     MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xF0C)),
     MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xF10)),
@@ -418,20 +423,47 @@ Mt6899MtcmosOn (
   VOID
   )
 {
-  UINT64 RmtOff;
   UINT64 RmtOn;
-  UINT64 Rmp;
 
-  // MTCMOS off first to reset the power domain (Linux: "First Restore
-  // here, to avoid backup unexpected value"), then on to init.
-  RmtOff = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_OFF, 0);
-  RmtOn  = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_ON, 0);
-  // Restore MPHY settings after power-on.
-  Rmp = Mt6899UfsSipSmc (UFS_SIP_MPHY_CTRL, UFS_MPHY_RESTORE, 0);
+  //
+  // v25: Linux only does the off/on pair *after* saving the MPHY state with
+  // UFS_MPHY_BACKUP, and only restores it when it owns an mphy_rst line.  We
+  // never did a BACKUP, so an unconditional RESTORE could write an empty
+  // calibration into the PHY.  Also, an MTCMOS off that fails to come back on
+  // would explain a permanently dead MPHY window.  Try ON-only and no RESTORE.
+  //
+  RmtOn = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_ON, 0);
 
   gMt6899UfsDiag[5] = (UINT32)RmtOn;
-  DEBUG ((DEBUG_ERROR, "UFS SMC MTCMOS off=%lx on=%lx MPHYrst=%lx\n",
-    (UINTN)RmtOff, (UINTN)RmtOn, (UINTN)Rmp));
+  DEBUG ((DEBUG_ERROR, "UFS SMC MTCMOS on=%lx (off/RESTORE skipped)\n",
+    (UINTN)RmtOn));
+  Mt6899PrintUfsWindows ("AFTER-MTCMOS");
+}
+
+/**
+  v25: try the remaining UFS SiP power subcommands.  Each is followed by a
+  window snapshot so we can see whether VA09 / SRAM / device power is the
+  missing enable for the MPHY register window.
+**/
+STATIC
+VOID
+Mt6899UfsPwrSmcTrials (
+  VOID
+  )
+{
+  UINT64 Ret;
+
+  Ret = Mt6899UfsSipSmc (UFS_SIP_VA09_PWR_CTRL, 1, 0);
+  DEBUG ((DEBUG_ERROR, "UFS SMC VA09 on ret=%lx\n", (UINTN)Ret));
+  Mt6899PrintUfsWindows ("AFTER-VA09");
+
+  Ret = Mt6899UfsSipSmc (UFS_SIP_SRAM_PWR_CTRL, 1, 0);
+  DEBUG ((DEBUG_ERROR, "UFS SMC SRAM on ret=%lx\n", (UINTN)Ret));
+  Mt6899PrintUfsWindows ("AFTER-SRAM");
+
+  Ret = Mt6899UfsSipSmc (UFS_SIP_DEVICE_PWR_CTRL, 1, 0);
+  DEBUG ((DEBUG_ERROR, "UFS SMC DEVPWR on ret=%lx\n", (UINTN)Ret));
+  Mt6899PrintUfsWindows ("AFTER-DEVPWR");
 }
 
 /**
@@ -560,55 +592,25 @@ Mt6899ClockEnable (
     }
 
     //
-    // Isolation hunt (v23): sweep every ufscfg register 0x00-0x7C in both
-    // blocks, clearing bit0 then bit1, and test MPHY writability after each.
-    // Only hits are printed; a summary line always appears.
+    // v24: MT6899 MPHY control window inside UFSHCI (REG_UFS_MPHYCTRL=0x2200).
     //
     {
       UINT32 Hits = 0;
-      UINT32 Tries = 0;
-      UINT32 Mask;
-      for (Base = 0; Base < 2; Base++) {
-        UINTN Addr = Base ? MT6899_UFS_CFG_PDN_BASE : MT6899_UFS_CFG_AO_BASE;
-        for (Off = 0; Off < 0x80; Off += 4) {
-          for (Mask = 1; Mask <= 2; Mask <<= 1) {
-            UINT32 Old = MmioRead32 ((UINTN)(Addr + Off));
-            if ((Old & Mask) == 0) continue;
-            MmioAnd32 ((UINTN)(Addr + Off), ~Mask);
-            MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
-            Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
-            MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
-            Tries++;
-            if (Wt != 0) {
-              Hits++;
-              DEBUG ((DEBUG_ERROR, "HIT %s %02lx clr%02x -> wt=%08x\n",
-                Base ? "PDN" : "AO ", (UINTN)Off, Mask, Wt));
-            } else {
-              MmioOr32 ((UINTN)(Addr + Off), Mask);
-            }
-          }
+      UINT32 T;
+      UINT32 O;
+      for (Off = 0x2200; Off < 0x2300; Off += 4) {
+        UINT32 V = MmioRead32 ((UINTN)Ufs->IoAddr + Off);
+        if (V != 0) {
+          Hits++;
+          DEBUG ((DEBUG_ERROR, "HCI %04lx = %08x\n", (UINTN)Off, V));
         }
       }
-      DEBUG ((DEBUG_ERROR, "SWEEP done tries=%d hits=%d\n", Tries, Hits));
-
-      // Reset polarity probes on ufscfg_ao / pdn 0x48/0x4C
-      MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + 0x4C), 0x200);
-      MicroSecondDelay (100);
-      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
-      Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
-      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
-      DEBUG ((DEBUG_ERROR, "POL AO4C=0x200 -> wt=%08x\n", Wt));
-
-      MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + 0x48), 0x0);
-      MicroSecondDelay (100);
-      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
-      Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
-      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
-      DEBUG ((DEBUG_ERROR, "POL AO48=0     -> wt=%08x\n", Wt));
-
-      DEBUG ((DEBUG_ERROR, "TOPCK U_SEL mux=%08x upd=%08x\n",
-        MmioRead32 ((UINTN)(0x10000000 + 0xD0)),
-        MmioRead32 ((UINTN)(0x10000000 + 0x08))));
+      DEBUG ((DEBUG_ERROR, "HCIWIN nonzero=%d\n", Hits));
+      O = MmioRead32 ((UINTN)Ufs->IoAddr + 0x2200);
+      MmioWrite32 ((UINTN)Ufs->IoAddr + 0x2200, 0x00FF00FF);
+      T = MmioRead32 ((UINTN)Ufs->IoAddr + 0x2200);
+      MmioWrite32 ((UINTN)Ufs->IoAddr + 0x2200, O);
+      DEBUG ((DEBUG_ERROR, "HCIWT 2200 wr=00FF00FF rd=%08x orig=%08x\n", T, O));
     }
   }
 }
@@ -946,8 +948,10 @@ UfsBoardInit (
   gMt6899UfsDiag[4] = (UINT32)Mt6899SmcccVersion ();
   DEBUG ((DEBUG_ERROR, "UFS SMCCC version=0x%x\n", gMt6899UfsDiag[4]));
 
+  Mt6899PrintUfsWindows ("AT-ENTRY");
   Mt6899SpmProbeAndPowerPhy ();
   Mt6899MtcmosOn ();
+  Mt6899UfsPwrSmcTrials ();
   gMt6899UfsDiag[10] = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
   DEBUG ((DEBUG_ERROR, "UFS MPHY 8C after MTCMOS = %08x\n", gMt6899UfsDiag[10]));
 
