@@ -935,9 +935,36 @@ UfsPreSetup (
 
 static void UfsVendorSetup (struct UfsHost *Ufs)
 {
+  UINT32 Hcs;
+  INTN   Retry;
+
   MmioWrite32((UINTN)(Ufs->VsAddr + VS_DATA_REORDER), 0xA);
+
+  //
+  // v28: HCE enable resets the transfer/task list run-stop bits (and on
+  // MT6899 the base registers written in UfsPreSetup are lost too).  HCS=0x08
+  // showed UCRDY only -- UTRLRS/UTMRLRS were 0 -- so the HCI never fetched any
+  // UTR and left the OCS_INVALID_COMMAND_STATUS sentinel untouched.  Re-arm
+  // both lists here, after HCE and before the first query.
+  //
+  Hcs = MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS));
+  DEBUG ((DEBUG_ERROR, "UFS lists before HCS=%08x\n", Hcs));
+
+  MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TRANSFER_REQ_LIST_BASE_L), (UINT32)(UINTN)Ufs->UtrdAddr);
+  MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TRANSFER_REQ_LIST_BASE_H), (UINT32)((UINTN)Ufs->UtrdAddr >> 32));
+  MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TASK_REQ_LIST_BASE_L), (UINT32)(UINTN)Ufs->UtmrdAddr);
+  MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TASK_REQ_LIST_BASE_H), (UINT32)((UINTN)Ufs->UtmrdAddr >> 32));
   MmioWrite32((UINTN)(Ufs->IoAddr + REG_UTP_TASK_REQ_LIST_RUN_STOP), 1);
   MmioWrite32((UINTN)(Ufs->IoAddr + REG_UTP_TRANSFER_REQ_LIST_RUN_STOP), 1);
+
+  for (Retry = 1000; Retry > 0; Retry--) {
+    Hcs = MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS));
+    if ((Hcs & 0x06) == 0x06) break;
+    MicroSecondDelay (10);
+  }
+  DEBUG ((DEBUG_ERROR, "UFS lists after HCS=%08x UTRLRS=%d UTMRLRS=%d\n",
+    Hcs, (Hcs >> 1) & 1, (Hcs >> 2) & 1));
+
   MmioWrite32((UINTN)(Ufs->VsAddr + VS_TXPRDT_ENTRY_SIZE), UFS_SG_BLOCK_SIZE_BIT);
   MmioWrite32((UINTN)(Ufs->VsAddr + VS_RXPRDT_ENTRY_SIZE), UFS_SG_BLOCK_SIZE_BIT);
   MmioWrite32((UINTN)(Ufs->VsAddr + VS_UTRL_NEXUS_TYPE), 0xFFFFFFFF);
