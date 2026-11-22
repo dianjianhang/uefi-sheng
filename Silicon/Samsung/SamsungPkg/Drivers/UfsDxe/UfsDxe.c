@@ -143,7 +143,10 @@ UfsHandleUicInt (
     Ret = UFS_NO_ERROR;
   }
 
-  if ((stat & UIC_ERROR) && (Cmd->uiccmdr != UIC_CMD_DME_LINK_STARTUP)) {
+  if ((stat & UIC_ERROR) &&
+      (Cmd->uiccmdr != UIC_CMD_DME_LINK_STARTUP) &&
+      (Cmd->uiccmdr != UIC_CMD_DME_RESET) &&
+      (Cmd->uiccmdr != UIC_CMD_DME_ENABLE)) {
     UINT32 PaErr = MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER));
 
     //
@@ -964,10 +967,40 @@ UfsLinkStartup (
   struct UfsHost *Ufs
   )
 {
-  struct UfsUicCmd Cmd = {UIC_CMD_DME_LINK_STARTUP, 0, 0, 0};
+  struct UfsUicCmd Cmd;
+  UINT32           PaErr;
+  INT32            Ret;
 
+  //
+  // v31: a LINERESET leaves PA in CFG/H8 and a bare DME_LINK_STARTUP is
+  // rejected (arg2=1).  Replay the standard UniPro sequence:
+  // DME_RESET -> DME_ENABLE -> DME_LINK_STARTUP.  Clear the sticky UECPA
+  // LINERESET indication first so it cannot poison the next command.
+  //
+  PaErr = MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER));
+  if (PaErr != 0)
+    MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER), PaErr);
+
+  Cmd.uiccmdr = UIC_CMD_DME_RESET;
+  Cmd.Arg1 = 0;
+  Cmd.Arg2 = 0;
+  Cmd.Arg3 = 0;
   Ufs->UicCmd = &Cmd;
-  return (UfsSendUicCmd (Ufs) == 0) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
+  Ret = UfsSendUicCmd (Ufs);
+  DEBUG ((DEBUG_ERROR, "UFS link reset ret=%d state=%d\n", Ret, UfsLinkState (Ufs)));
+  MicroSecondDelay (1000);
+
+  Cmd.uiccmdr = UIC_CMD_DME_ENABLE;
+  Ufs->UicCmd = &Cmd;
+  Ret = UfsSendUicCmd (Ufs);
+  DEBUG ((DEBUG_ERROR, "UFS link enable ret=%d state=%d\n", Ret, UfsLinkState (Ufs)));
+  MicroSecondDelay (1000);
+
+  Cmd.uiccmdr = UIC_CMD_DME_LINK_STARTUP;
+  Ufs->UicCmd = &Cmd;
+  Ret = UfsSendUicCmd (Ufs);
+  DEBUG ((DEBUG_ERROR, "UFS link startup ret=%d state=%d\n", Ret, UfsLinkState (Ufs)));
+  return (Ret == 0) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }
 
 static void UfsVendorSetup (struct UfsHost *Ufs)
@@ -1119,7 +1152,6 @@ UfsInitInterface (
   struct UfsHost *Ufs
 )
 {
-  struct UfsUicCmd LinkCmd = {UIC_CMD_DME_LINK_STARTUP, 0, 0, 0};
   struct UfsUicCmd LaneCmd = {UIC_CMD_DME_GET, (0x1540U << 16), 0, 0};
   struct UicPwrMode *Pmd = &Ufs->PmdCxt;
   EFI_STATUS Status;
@@ -1181,21 +1213,13 @@ UfsInitInterface (
       LnkErr = 0;
     } else {
       for (Attempt = 0; Attempt < 8; Attempt++) {
-        LinkCmd.uiccmdr = UIC_CMD_DME_LINK_STARTUP;
-        LinkCmd.Arg1    = 0;
-        LinkCmd.Arg2    = 0;
-        LinkCmd.Arg3    = 0;
-        Ufs->UicCmd = &LinkCmd;
-
-        LnkErr = UfsSendUicCmd (Ufs);
-        if ((LnkErr == 0) && UfsWaitLinkUp (Ufs, 100000)) {
+        if (!EFI_ERROR (UfsLinkStartup (Ufs)) && UfsWaitLinkUp (Ufs, 100000)) {
+          LnkErr = 0;
           break;
         }
-        if (LnkErr == 0) {
-          DEBUG ((EFI_D_ERROR, "UFS lsa %d command OK but state=%d\n",
-            Attempt + 1, UfsLinkState (Ufs)));
-          LnkErr = UFS_ERROR;
-        }
+        LnkErr = UFS_ERROR;
+        DEBUG ((EFI_D_ERROR, "UFS lsa %d/8 failed state=%d\n",
+          Attempt + 1, UfsLinkState (Ufs)));
 
         Ot  = MmioRead32 ((UINTN)(Ufs->IoAddr + 0x14C));
         DEBUG ((EFI_D_ERROR, "UFS lsa %d/8 err=%d OTSD=%08x LNK=%d\n",
