@@ -511,15 +511,21 @@ Mt6899ClockEnable (
   gMt6899UfsDiag[2] = StaPdn;
   DEBUG ((DEBUG_ERROR, "UFS CLK AO=%08x want=0 PDN=%08x want=0\n",
     StaAo & UFSAO_CLK_MASK, StaPdn & UFSPDN_CLK_MASK));
-  DEBUG ((DEBUG_ERROR, "UFS CFG ao(%08x %08x %08x %08x) pdn(%08x %08x %08x %08x)\n",
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x00)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x04)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x08)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x0C)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x00)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x04)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x08)),
-    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x0C))));
+  {
+    UINTN Base;
+    UINTN Off;
+    for (Base = 0; Base < 2; Base++) {
+      UINTN Addr = Base ? MT6899_UFS_CFG_PDN_BASE : MT6899_UFS_CFG_AO_BASE;
+      for (Off = 0; Off < 0x80; Off += 0x20) {
+        DEBUG ((DEBUG_ERROR, "UFS CFG %s %02lx: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+          Base ? "PDN" : "AO ", (UINTN)Off,
+          MmioRead32 ((UINTN)(Addr + Off + 0x00)), MmioRead32 ((UINTN)(Addr + Off + 0x04)),
+          MmioRead32 ((UINTN)(Addr + Off + 0x08)), MmioRead32 ((UINTN)(Addr + Off + 0x0C)),
+          MmioRead32 ((UINTN)(Addr + Off + 0x10)), MmioRead32 ((UINTN)(Addr + Off + 0x14)),
+          MmioRead32 ((UINTN)(Addr + Off + 0x18)), MmioRead32 ((UINTN)(Addr + Off + 0x1C))));
+      }
+    }
+  }
 }
 
 /**
