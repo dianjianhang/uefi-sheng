@@ -168,6 +168,11 @@ UINT32  gMt6899SpmDiag[6];
 #define PWR_ACK_2ND             BIT31
 #define SRAM_PDN                BIT8
 #define SRAM_PDN_ACK            BIT12
+// MT6899 spm_reg.h: UFS0/UFS0_PHY SSYS control bits
+#define UFS_SSYS_SEL_SPM_OR_SUB_PM  BIT16   // 0 = SPM controls the domain
+#define UFS_SSYS_PWR_ON_OFF         BIT17
+#define UFS_SSYS_RTFF_GRP_EN_MASK   (3U << 18)
+#define UFS_SSYS_SRAM_DORMANT_MASK  (0xFU << 20)
 #define UFS_SIP_MTCMOS_CTRL     0x200ULL   // BIT(9)
 #define UFS_SIP_MPHY_CTRL       0x100ULL   // BIT(8)
 #define UFS_SIP_REF_CLK_NOTIFY  0x8ULL     // BIT(3)
@@ -271,13 +276,21 @@ SpmPowerOnDomain (
 
   DEBUG ((DEBUG_ERROR, "UFS SPM dom 0x%lx before=%08x\n", (UINTN)Off, V));
 
-  if ((V & PWR_ACK) != 0) {
+  if (((V & PWR_ON) != 0) && ((V & PWR_ACK) != 0)) {
     DEBUG ((DEBUG_ERROR, "UFS SPM dom 0x%lx already ON\n", (UINTN)Off));
     return;
   }
 
   // Unlock SPM register writes (project code 0xB16).
   MmioWrite32 ((UINTN)SPM_POWERON_CONFIG_EN, ((UINT32)SPM_PROJECT_CODE << 16) | 1);
+
+  //
+  // Make sure the domain is under SPM control (not sub-PM) and clear any
+  // lingering SSYS/RTFF/SRAM-dormant settings before powering up.
+  //
+  MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Off),
+             ~(UFS_SSYS_SEL_SPM_OR_SUB_PM | UFS_SSYS_PWR_ON_OFF |
+               UFS_SSYS_RTFF_GRP_EN_MASK | UFS_SSYS_SRAM_DORMANT_MASK));
 
   MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_ON);
   if (!SpmWaitAck (MT6899_SPM_BASE + Off, PWR_ACK, TRUE)) {
@@ -350,7 +363,7 @@ Mt6899SpmProbeAndPowerPhy (
   //
   // UFS controller domain first (usually already on), then the PHY domain.
   SpmPowerOnDomain (MT6899_UFS0_PWR_CON_OFF, TRUE);
-  SpmPowerOnDomain (MT6899_UFS0_PHY_PWR_CON_OFF, FALSE);
+  SpmPowerOnDomain (MT6899_UFS0_PHY_PWR_CON_OFF, TRUE);
 
   gMt6899SpmDiag[4] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PWR_CON_OFF));
   gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PHY_PWR_CON_OFF));
@@ -495,6 +508,15 @@ Mt6899ClockEnable (
   gMt6899UfsDiag[2] = StaPdn;
   DEBUG ((DEBUG_ERROR, "UFS CLK AO=%08x want=0 PDN=%08x want=0\n",
     StaAo & UFSAO_CLK_MASK, StaPdn & UFSPDN_CLK_MASK));
+  DEBUG ((DEBUG_ERROR, "UFS CFG ao(%08x %08x %08x %08x) pdn(%08x %08x %08x %08x)\n",
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x00)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x04)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x08)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE  + 0x0C)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x00)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x04)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x08)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + 0x0C))));
 }
 
 /**
