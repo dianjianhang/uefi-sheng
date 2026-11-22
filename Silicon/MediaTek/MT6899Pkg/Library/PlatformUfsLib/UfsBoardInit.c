@@ -300,6 +300,17 @@ Mt6899SpmProbeAndPowerPhy (
     gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
 
   //
+  // Safety gate: SPM's POWERON_CONFIG_EN carries the project code 0xB16 in
+  // bits[31:16] once TF-A has unlocked it.  If that signature is absent the
+  // base address is wrong -- do NOT write anything.
+  //
+  if ((gMt6899SpmDiag[0] >> 16) != SPM_PROJECT_CODE) {
+    DEBUG ((DEBUG_ERROR, "UFS SPM signature mismatch (cfg=%08x), skip writes\n",
+      gMt6899SpmDiag[0]));
+    return;
+  }
+
+  //
   // Pick the UFS PHY domain: prefer 0xE30 (mt8196 layout, closest generation),
   // fall back to 0xE14 (mt8189 layout) if E30 reads back as all-ones (absent).
   //
