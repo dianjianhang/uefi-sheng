@@ -138,6 +138,7 @@ STATIC UINT32  mVsScratch[0x400 / sizeof (UINT32)];
 //   [12] HCE at entry                           [13] OTSD after board init
 //
 UINT32  gMt6899UfsDiag[14];
+UINT32  gMt6899SpmDiag[6];
 
 //
 // MediaTek SiP SMC for UFS (from ufs-mediatek-sip.h).
@@ -147,7 +148,21 @@ UINT32  gMt6899UfsDiag[14];
 //   cmd: MTCMOS_CTRL = BIT9 (0x200), MPHY_CTRL = BIT8 (0x100)
 //   arg1 (v1): MTCMOS on/off (1=on), MPHY op (0=BACKUP,1=RESTORE)
 //
-#define MTK_SIP_UFS_CONTROL     0xC2000276ULL
+#define MTK_SIP_UFS_CONTROL     0xC2000276ULL   // KERNEL table (NS_EL1) - NOT for BL33
+#define MTK_SIP_BL_UFS_CONTROL  0xC200040DULL   // BL33 table (UEFI/LK) - only DEVICE_RESET
+#define MT6899_SPM_BASE         0x1C001000UL    // power-controller@1c001000 (SPM/SCPSYS)
+#define SPM_POWERON_CONFIG_EN   (MT6899_SPM_BASE + 0x000)
+#define SPM_PWR_STATUS          (MT6899_SPM_BASE + 0x180)
+#define SPM_PROJECT_CODE        0xB16U
+#define PWR_RST_B               BIT0
+#define PWR_ISO                 BIT1
+#define PWR_ON                  BIT2
+#define PWR_ON_2ND              BIT3
+#define PWR_CLK_DIS             BIT4
+#define PWR_ACK                 BIT30
+#define PWR_ACK_2ND             BIT31
+#define SRAM_PDN                BIT8
+#define SRAM_PDN_ACK            BIT12
 #define UFS_SIP_MTCMOS_CTRL     0x200ULL   // BIT(9)
 #define UFS_SIP_MPHY_CTRL       0x100ULL   // BIT(8)
 #define UFS_SIP_REF_CLK_NOTIFY  0x8ULL     // BIT(3)
@@ -161,6 +176,28 @@ UINT32  gMt6899UfsDiag[14];
 #define UFS_SMC_POST_CHANGE     1ULL
 #define UFS_DEV_RESET_ASSERT    0ULL   // active-low
 #define UFS_DEV_RESET_DEASSERT  1ULL
+
+STATIC
+UINT64
+Mt6899SmcCall (
+  IN UINT64 Fid,
+  IN UINT64 Arg1,
+  IN UINT64 Arg2,
+  IN UINT64 Arg3
+  )
+{
+  register UINT64 X0 __asm__("x0") = Fid;
+  register UINT64 X1 __asm__("x1") = Arg1;
+  register UINT64 X2 __asm__("x2") = Arg2;
+  register UINT64 X3 __asm__("x3") = Arg3;
+
+  __asm__ volatile ("smc #0"
+    : "+r" (X0), "+r" (X1), "+r" (X2), "+r" (X3)
+    :
+    : "memory", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+      "x12", "x13", "x14", "x15", "x16", "x17");
+  return X0;
+}
 
 STATIC
 UINT64
@@ -212,6 +249,96 @@ Mt6899SmcccVersion (
     : "memory", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
       "x12", "x13", "x14", "x15", "x16", "x17");
   return X0;
+}
+
+STATIC
+BOOLEAN
+SpmWaitAck (
+  IN UINTN   Reg,
+  IN UINT32  Mask,
+  IN BOOLEAN Set
+  )
+{
+  UINT32 Retry;
+  for (Retry = 0; Retry < 500; Retry++) {
+    if (((MmioRead32 (Reg) & Mask) != 0) == Set) {
+      return TRUE;
+    }
+    MicroSecondDelay (1);
+  }
+  return FALSE;
+}
+
+/**
+  Power on one SPM MTCMOS domain (TF-A plat/mediatek/drivers/mtcmos/mtcmos.c
+  sequence).  MT6899 SPM lives at 0x1C001000 (power-controller@1c001000).
+
+  The UFS PHY sits on its own domain (UFS0_PHY_PWR_CON); while it is off every
+  MPHY register reads back 0.  We probe the known candidate offsets first and
+  only touch one that looks powered-down.
+**/
+STATIC
+VOID
+Mt6899SpmProbeAndPowerPhy (
+  VOID
+  )
+{
+  UINTN  Off;
+  UINT32 V;
+  UINTN  i;
+
+  gMt6899SpmDiag[0] = MmioRead32 ((UINTN)SPM_POWERON_CONFIG_EN);
+  gMt6899SpmDiag[1] = MmioRead32 ((UINTN)SPM_PWR_STATUS);
+
+  gMt6899SpmDiag[2] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE10));
+  gMt6899SpmDiag[3] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE14));
+  gMt6899SpmDiag[4] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE2C));
+  gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE30));
+
+  DEBUG ((DEBUG_ERROR, "UFS SPM cfg=%08x sta=%08x E10=%08x E14=%08x E2C=%08x E30=%08x\n",
+    gMt6899SpmDiag[0], gMt6899SpmDiag[1], gMt6899SpmDiag[2], gMt6899SpmDiag[3],
+    gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
+
+  //
+  // Pick the UFS PHY domain: prefer 0xE30 (mt8196 layout, closest generation),
+  // fall back to 0xE14 (mt8189 layout) if E30 reads back as all-ones (absent).
+  //
+  Off = (gMt6899SpmDiag[5] == 0xFFFFFFFF) ? 0xE14 : 0xE30;
+  V   = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Off));
+
+  DEBUG ((DEBUG_ERROR, "UFS SPM selected offset 0x%lx val=%08x\n", (UINTN)Off, V));
+
+  if ((V & PWR_ACK) != 0) {
+    DEBUG ((DEBUG_ERROR, "UFS SPM domain already ON (ack set), skip\n"));
+    return;
+  }
+
+  // Unlock SPM write access.
+  MmioWrite32 ((UINTN)SPM_POWERON_CONFIG_EN, ((UINT32)SPM_PROJECT_CODE << 16) | 1);
+
+  MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_ON);
+  if (!SpmWaitAck (MT6899_SPM_BASE + Off, PWR_ACK, TRUE)) {
+    DEBUG ((DEBUG_ERROR, "UFS SPM PWR_ON ack timeout\n"));
+  }
+  MicroSecondDelay (50);
+
+  MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_ON_2ND);
+  if (!SpmWaitAck (MT6899_SPM_BASE + Off, PWR_ACK_2ND, TRUE)) {
+    DEBUG ((DEBUG_ERROR, "UFS SPM PWR_ON_2ND ack timeout\n"));
+  }
+
+  MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Off), ~(PWR_CLK_DIS | PWR_ISO));
+  MicroSecondDelay (10);
+  MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_RST_B);
+
+  MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Off), ~SRAM_PDN);
+  SpmWaitAck (MT6899_SPM_BASE + Off, SRAM_PDN_ACK, FALSE);
+
+  gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Off));
+  DEBUG ((DEBUG_ERROR, "UFS SPM after power-on 0x%lx = %08x\n",
+    (UINTN)Off, gMt6899SpmDiag[5]));
+
+  (VOID)i;
 }
 
 /**
@@ -278,12 +405,16 @@ Mt6899DeviceReset (
   UINT64 Rlow;
   UINT64 Rhigh;
 
+  // UEFI runs as BL33, so only MTK_SIP_BL_UFS_CONTROL (0xC200040D) is routed
+  // to the UFS handler -- and that handler implements DEVICE_RESET only.
   // Assert reset (low).
-  Rlow = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_ASSERT, 0);
+  Rlow = Mt6899SmcCall (MTK_SIP_BL_UFS_CONTROL, UFS_SIP_DEVICE_RESET,
+                        UFS_DEV_RESET_ASSERT, 0);
   MicroSecondDelay (20);       // >= 10us per spec
 
   // Deassert reset (high).
-  Rhigh = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_DEASSERT, 0);
+  Rhigh = Mt6899SmcCall (MTK_SIP_BL_UFS_CONTROL, UFS_SIP_DEVICE_RESET,
+                         UFS_DEV_RESET_DEASSERT, 0);
 
   gMt6899UfsDiag[7] = (UINT32)Rhigh;
   DEBUG ((DEBUG_ERROR, "UFS SMC devrst lo=%lx hi=%lx\n",
@@ -560,6 +691,7 @@ UfsBoardInit (
   gMt6899UfsDiag[4] = (UINT32)Mt6899SmcccVersion ();
   DEBUG ((DEBUG_ERROR, "UFS SMCCC version=0x%x\n", gMt6899UfsDiag[4]));
 
+  Mt6899SpmProbeAndPowerPhy ();
   Mt6899MtcmosOn ();
   gMt6899UfsDiag[10] = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
   DEBUG ((DEBUG_ERROR, "UFS MPHY 8C after MTCMOS = %08x\n", gMt6899UfsDiag[10]));

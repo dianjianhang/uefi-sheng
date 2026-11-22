@@ -17,6 +17,7 @@
 // Filled by the MT6899 board init; printed again right before halting so the
 // key values remain visible on the final screen.
 extern UINT32 gMt6899UfsDiag[14];
+extern UINT32 gMt6899SpmDiag[6];
 
 STATIC
 VOID
@@ -30,6 +31,10 @@ UfsPrintDiagSummary (
     gMt6899UfsDiag[4], gMt6899UfsDiag[5], gMt6899UfsDiag[6], gMt6899UfsDiag[7],
     gMt6899UfsDiag[8], gMt6899UfsDiag[9], gMt6899UfsDiag[10], gMt6899UfsDiag[11],
     gMt6899UfsDiag[12], gMt6899UfsDiag[13]));
+  DEBUG ((EFI_D_ERROR,
+    "### UFSDIAG3 %08x %08x %08x %08x %08x %08x ###\n",
+    gMt6899SpmDiag[0], gMt6899SpmDiag[1], gMt6899SpmDiag[2],
+    gMt6899SpmDiag[3], gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
 }
 
 UINT8 gQueryParams[][5] = {
