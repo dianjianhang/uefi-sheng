@@ -546,6 +546,72 @@ Mt6899MphyResetRelease (
 }
 
 /**
+  Full MT6899 MPHY tuning sequence, transcribed from the stock preloader
+  (preloader_raw.img, function at 0x8e1fc; helper mphy_update(off,clr,set) at
+  0x9007c writes 0x112A0000+off).  Linux's phy-mtk-ufs.c only restores the
+  four power registers, because on a normal boot the preloader's calibration
+  survives; if the PHY domain was power-cycled we have to replay all of it.
+**/
+STATIC
+VOID
+Mt6899MphyUpdate (
+  IN UINT32 Off,
+  IN UINT32 Clr,
+  IN UINT32 Set
+  )
+{
+  UINT32 V = MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + Off));
+  V = (V & ~Clr) | Set;
+  MmioWrite32 ((UINTN)(MT6899_UFS_PHY_BASE + Off), V);
+}
+
+STATIC
+VOID
+Mt6899MphyTuning (
+  VOID
+  )
+{
+  UINT32 i;
+
+  // global registers
+  Mt6899MphyUpdate (0x1000, 0x0000003C, 0x0000002C);
+  Mt6899MphyUpdate (0x1064, 0x00000FFF, 0x00000ACC);
+  Mt6899MphyUpdate (0x9000, 0x00000040, 0);
+  Mt6899MphyUpdate (0x9100, 0x00000040, 0);
+  Mt6899MphyUpdate (0x105C, 0, 0x00000009);
+  Mt6899MphyUpdate (0x00F0, 0x0003C07F, 0x00030058);
+  Mt6899MphyUpdate (0x1010, 0x00000010, 0);
+  Mt6899MphyUpdate (0x0010, 0x00200000, 0);
+  Mt6899MphyUpdate (0x8110, 0x00000300, 0);
+  Mt6899MphyUpdate (0x00F4, 0x00000F00, 0);
+  Mt6899MphyUpdate (0x001C, 0xFF000000, 0x40000000);
+  Mt6899MphyUpdate (0x0200, 0, 0x0000FFFF);
+
+  for (i = 0; i < 2; i++) {
+    UINT32 L = i * 0x100;
+
+    Mt6899MphyUpdate (0xA6D8 + L, 0x03FFE000, 0x03FE0000);
+    Mt6899MphyUpdate (0xC0E8 + L, 0x0000FFFF, 0);
+    Mt6899MphyUpdate (0xC0F0 + L, 0xFFFFFFFF, 0);
+    Mt6899MphyUpdate (0xA6D0 + L, 0x0000F000, 0xC0007000);
+    Mt6899MphyUpdate (0xA6D4 + L, 0x00003FFF, 0x00001DDD);
+    Mt6899MphyUpdate (0xA480 + L, 0x00000222, 0);
+    Mt6899MphyUpdate (0xA208 + L, 0x0C000000, 0x08000000);
+    Mt6899MphyUpdate (0xA20C + L, 0x000F3000, 0x000A2000);
+    Mt6899MphyUpdate (0xA210 + L, 0x000000C3, 0x00000082);
+    Mt6899MphyUpdate (0xA214 + L, 0x60000000, 0x40000000);
+    Mt6899MphyUpdate (0xB030 + L, 0, 0x20000000);
+    Mt6899MphyUpdate (0xA6C8 + L, 0x0C000000, 0x0C000000);
+    Mt6899MphyUpdate (0xA020 + L, 0x0E000000, 0x06000000);
+    Mt6899MphyUpdate (0xA4F0 + L, 0xFFFFFFFF, 0x80000000);
+    Mt6899MphyUpdate (0xB034 + L, 0x000000FF, 0x000000AC);
+    Mt6899MphyUpdate (0xB030 + L, 0x000000FF, 0x00000024);
+  }
+
+  DEBUG ((DEBUG_ERROR, "UFS MPHY tuning applied (preloader sequence)\n"));
+}
+
+/**
   Bring the MediaTek MPHY out of reset - mirrors ufs_mtk_phy_set_active().
 **/
 STATIC
@@ -731,6 +797,7 @@ UfsBoardInit (
   //
   Mt6899MphyResetRelease ();
   Mt6899MphyPowerOn ();
+  Mt6899MphyTuning ();
 
   {
     UINT32 C8 = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
@@ -773,6 +840,7 @@ UfsBoardInit (
   Mt6899ClockEnable ();
   Mt6899MphyResetRelease ();
   Mt6899MphyPowerOn ();
+  Mt6899MphyTuning ();
 
   Status = Mt6899RefClkEnable (Ufs);
   if (EFI_ERROR (Status)) {
