@@ -54,7 +54,12 @@
 #define UFS_RXTX_POWER_MODE   ((UFS_POWER_MODE << 4) | UFS_POWER_MODE)
 
 #define UPMCRS(x)      (((x) >> 8) & 7)
+#define PWR_OK          0
 #define PWR_LOCAL       1
+// UECPA: PHY adapter layer error; 0x10 is the LINERESET indication.
+#define UIC_PA_ERROR_BIT        BIT31
+#define UIC_PA_ERROR_CODE_MASK  0x1FU
+#define UIC_PA_GENERIC_ERROR    0x10U
 
 // BlockIo
 #define UFS_LUN_SIGNATURE  SIGNATURE_32('U','F','S','L')

@@ -134,18 +134,33 @@ UfsHandleUicInt (
   struct UfsUicCmd *Cmd = Ufs->UicCmd;
 
   if (stat & UIC_COMMAND_COMPL) {
-    if (Cmd->uiccmdr == UIC_CMD_DME_LINK_STARTUP)
-      Ret = UFS_NO_ERROR;
-    else if ((Cmd->uiccmdr == UIC_CMD_DME_SET) && (Cmd->Arg1 == (0x1571U << 16))) {
-      if (stat & UIC_POWER_MODE) Ret = UFS_NO_ERROR;
-    }
-    else
-      Ret = UFS_NO_ERROR;
+    //
+    // Command completion is the UIC result.  UPMS (UIC_POWER_MODE) is only an
+    // asynchronous status indication and is not guaranteed to be asserted in
+    // the same interrupt on MT6899 -- requiring it made every PA_PWRMode
+    // DME_SET time out.
+    //
+    Ret = UFS_NO_ERROR;
   }
 
   if ((stat & UIC_ERROR) && (Cmd->uiccmdr != UIC_CMD_DME_LINK_STARTUP)) {
-    DEBUG ((EFI_D_ERROR, "UFS UIC ERROR 0x%08x\n", stat));
-    Ret = UFS_ERROR;
+    UINT32 PaErr = MmioRead32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER));
+
+    //
+    // A LINERESET indication (PA generic error 0x10) is expected while PA
+    // processes a PA_PWRMode change.  Linux explicitly ignores it for DME_SET
+    // PA_PWRMode; treat it the same way and clear the sticky PA error bit.
+    //
+    if ((Cmd->uiccmdr == UIC_CMD_DME_SET) &&
+        (Cmd->Arg1 == (0x1571U << 16)) &&
+        ((PaErr & UIC_PA_ERROR_BIT) != 0) &&
+        ((PaErr & UIC_PA_ERROR_CODE_MASK) == UIC_PA_GENERIC_ERROR)) {
+      DEBUG ((EFI_D_INFO, "UFS: ignore PA LINERESET during PA_PWRMode change\n"));
+      MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER), PaErr);
+    } else {
+      DEBUG ((EFI_D_ERROR, "UFS UIC ERROR 0x%08x\n", stat));
+      Ret = UFS_ERROR;
+    }
   }
   return Ret;
 }
@@ -960,7 +975,7 @@ UfsPmcCommon (
   if (UfsSendUicCmd (Ufs)) return EFI_DEVICE_ERROR;
 
   Register = MmioRead32((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS));
-  if (UPMCRS (Register) != PWR_LOCAL) {
+  if ((UPMCRS (Register) != PWR_OK) && (UPMCRS (Register) != PWR_LOCAL)) {
     DEBUG ((DEBUG_ERROR, "UFS Gear change failed, UPMCRS=0x%x\n", UPMCRS (Register)));
     return EFI_DEVICE_ERROR;
   }
