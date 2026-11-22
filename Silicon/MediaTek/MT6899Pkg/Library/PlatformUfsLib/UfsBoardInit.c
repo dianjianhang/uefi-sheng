@@ -530,20 +530,55 @@ Mt6899ClockEnable (
     }
 
     //
-    // Isolation hunt: clear the low control bits of the unknown ufscfg
-    // registers one at a time and, after each, test whether the MPHY block
-    // became writable (write 1 to 0x8C, read back, restore).
+    // Isolation hunt (v23): sweep every ufscfg register 0x00-0x7C in both
+    // blocks, clearing bit0 then bit1, and test MPHY writability after each.
+    // Only hits are printed; a summary line always appears.
     //
-    for (Base = 0; Base < 2; Base++) {
-      UINTN Addr = Base ? MT6899_UFS_CFG_PDN_BASE : MT6899_UFS_CFG_AO_BASE;
-      for (Off = 0x10; Off <= 0x20; Off += 4) {
-        MmioAnd32 ((UINTN)(Addr + Off), ~0x00000003U);
-        MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
-        Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
-        MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
-        DEBUG ((DEBUG_ERROR, "TRY %s %02lx clr03 -> wt=%08x\n",
-          Base ? "PDN" : "AO ", (UINTN)Off, Wt));
+    {
+      UINT32 Hits = 0;
+      UINT32 Tries = 0;
+      UINT32 Mask;
+      for (Base = 0; Base < 2; Base++) {
+        UINTN Addr = Base ? MT6899_UFS_CFG_PDN_BASE : MT6899_UFS_CFG_AO_BASE;
+        for (Off = 0; Off < 0x80; Off += 4) {
+          for (Mask = 1; Mask <= 2; Mask <<= 1) {
+            UINT32 Old = MmioRead32 ((UINTN)(Addr + Off));
+            if ((Old & Mask) == 0) continue;
+            MmioAnd32 ((UINTN)(Addr + Off), ~Mask);
+            MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
+            Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+            MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
+            Tries++;
+            if (Wt != 0) {
+              Hits++;
+              DEBUG ((DEBUG_ERROR, "HIT %s %02lx clr%02x -> wt=%08x\n",
+                Base ? "PDN" : "AO ", (UINTN)Off, Mask, Wt));
+            } else {
+              MmioOr32 ((UINTN)(Addr + Off), Mask);
+            }
+          }
+        }
       }
+      DEBUG ((DEBUG_ERROR, "SWEEP done tries=%d hits=%d\n", Tries, Hits));
+
+      // Reset polarity probes on ufscfg_ao / pdn 0x48/0x4C
+      MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + 0x4C), 0x200);
+      MicroSecondDelay (100);
+      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
+      Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
+      DEBUG ((DEBUG_ERROR, "POL AO4C=0x200 -> wt=%08x\n", Wt));
+
+      MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + 0x48), 0x0);
+      MicroSecondDelay (100);
+      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
+      Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+      MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
+      DEBUG ((DEBUG_ERROR, "POL AO48=0     -> wt=%08x\n", Wt));
+
+      DEBUG ((DEBUG_ERROR, "TOPCK U_SEL mux=%08x upd=%08x\n",
+        MmioRead32 ((UINTN)(0x10000000 + 0xD0)),
+        MmioRead32 ((UINTN)(0x10000000 + 0x08))));
     }
   }
 }
