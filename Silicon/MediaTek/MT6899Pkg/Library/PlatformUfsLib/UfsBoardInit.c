@@ -153,6 +153,7 @@ UINT32  gMt6899SpmDiag[6];
 #define MT6899_SPM_BASE         0x1C001000UL    // power-controller@1c001000 (SPM/SCPSYS)
 #define SPM_POWERON_CONFIG_EN   (MT6899_SPM_BASE + 0x000)
 #define SPM_PWR_STATUS          (MT6899_SPM_BASE + 0x180)
+#define SPM_PWR_STATUS_2ND      (MT6899_SPM_BASE + 0x184)
 #define SPM_PROJECT_CODE        0xB16U
 // MT6899 SPM register offsets (drivers/misc/mediatek/lpm/.../mt6899/spm_reg.h)
 //   UFS0_PWR_CON      = SPM_BASE + 0xE18
@@ -346,6 +347,8 @@ Mt6899SpmProbeAndPowerPhy (
 
   gMt6899SpmDiag[0] = Cfg;
   gMt6899SpmDiag[1] = MmioRead32 ((UINTN)SPM_PWR_STATUS);
+  DEBUG ((DEBUG_ERROR, "UFS SPM pwr_status=%08x 2nd=%08x\n",
+    MmioRead32 ((UINTN)SPM_PWR_STATUS), MmioRead32 ((UINTN)SPM_PWR_STATUS_2ND)));
   gMt6899SpmDiag[2] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE10));
   gMt6899SpmDiag[3] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE14));
   gMt6899SpmDiag[4] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PWR_CON_OFF));

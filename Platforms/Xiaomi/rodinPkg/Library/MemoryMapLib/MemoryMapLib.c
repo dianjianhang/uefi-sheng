@@ -156,7 +156,7 @@ STATIC EFI_MEMORY_REGION_DESCRIPTOR gMemoryDescriptor[] = {
   {"Display Config", 0x14000000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // dispsys-config@14000000 (live)
   {"SPM / SCPSYS", 0x1C001000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // power-controller@1c001000: MTCMOS PWR_CON regs (UFS0 PHY domain)
   {"WatchDog Timer", 0x1C00B000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // watchdog@1c00b000 mt6899-wdt (live)
-  {"SPMI/PMIC", 0x1CC04000, 0x00001000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // 1cc04000.spmi pmif -- live (PMIC via SPMI)
+  {"PMIC Wrapper / SPMI", 0x1CC00000, 0x00010000, AddDev, MMAP_IO, UNCACHEABLE, MmIO, NS_DEVICE}, // pwrap base 1cc00000 + spmi pmif 1cc04000 (live)
 };
 
 VOID
