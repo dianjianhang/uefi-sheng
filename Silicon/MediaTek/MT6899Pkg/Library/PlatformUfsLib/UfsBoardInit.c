@@ -599,17 +599,17 @@ Mt6899ClockEnable (
       UINT32 T;
       UINT32 O;
       for (Off = 0x2200; Off < 0x2300; Off += 4) {
-        UINT32 V = MmioRead32 ((UINTN)Ufs->IoAddr + Off);
+        UINT32 V = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + Off);
         if (V != 0) {
           Hits++;
           DEBUG ((DEBUG_ERROR, "HCI %04lx = %08x\n", (UINTN)Off, V));
         }
       }
       DEBUG ((DEBUG_ERROR, "HCIWIN nonzero=%d\n", Hits));
-      O = MmioRead32 ((UINTN)Ufs->IoAddr + 0x2200);
-      MmioWrite32 ((UINTN)Ufs->IoAddr + 0x2200, 0x00FF00FF);
-      T = MmioRead32 ((UINTN)Ufs->IoAddr + 0x2200);
-      MmioWrite32 ((UINTN)Ufs->IoAddr + 0x2200, O);
+      O = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x2200);
+      MmioWrite32 ((UINTN)MT6899_UFS_HCI_BASE + 0x2200, 0x00FF00FF);
+      T = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x2200);
+      MmioWrite32 ((UINTN)MT6899_UFS_HCI_BASE + 0x2200, O);
       DEBUG ((DEBUG_ERROR, "HCIWT 2200 wr=00FF00FF rd=%08x orig=%08x\n", T, O));
     }
   }
