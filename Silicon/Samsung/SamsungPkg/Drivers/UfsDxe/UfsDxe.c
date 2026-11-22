@@ -950,6 +950,24 @@ static void UfsVendorSetup (struct UfsHost *Ufs)
   Hcs = MmioRead32 ((UINTN)(Ufs->IoAddr + REG_CONTROLLER_STATUS));
   DEBUG ((DEBUG_ERROR, "UFS lists before HCS=%08x\n", Hcs));
 
+  //
+  // v29: UFSHCI 4.0 MEM_CFG.0 selects MCQ mode.  If the bootloader left MCQ
+  // enabled the legacy UTRL/UTMRL we use here is ignored by the HCI, which
+  // explains OCS=0x0F (the sentinel is never overwritten) with an all-zero
+  // response UPIU.  Force legacy mode before re-arming the lists.
+  //
+  {
+    UINT32 MemCfg = MmioRead32 ((UINTN)(Ufs->IoAddr + 0x300));
+
+    DEBUG ((DEBUG_ERROR, "UFS MEMCFG 300=%08x MCQCAP=%08x\n",
+      MemCfg, MmioRead32 ((UINTN)(Ufs->IoAddr + 0x04))));
+    if ((MemCfg & 1) != 0) {
+      MmioWrite32 ((UINTN)(Ufs->IoAddr + 0x300), MemCfg & ~1U);
+      DEBUG ((DEBUG_ERROR, "UFS MEMCFG MCQ disabled -> %08x\n",
+        MmioRead32 ((UINTN)(Ufs->IoAddr + 0x300))));
+    }
+  }
+
   MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TRANSFER_REQ_LIST_BASE_L), (UINT32)(UINTN)Ufs->UtrdAddr);
   MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TRANSFER_REQ_LIST_BASE_H), (UINT32)((UINTN)Ufs->UtrdAddr >> 32));
   MmioWrite32 ((UINTN)(Ufs->IoAddr + REG_UTP_TASK_REQ_LIST_BASE_L), (UINT32)(UINTN)Ufs->UtmrdAddr);
