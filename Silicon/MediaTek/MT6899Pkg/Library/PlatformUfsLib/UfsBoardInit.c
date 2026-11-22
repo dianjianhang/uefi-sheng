@@ -344,7 +344,14 @@ Mt6899SpmProbeAndPowerPhy (
   VOID
   )
 {
-  UINT32 Cfg = MmioRead32 ((UINTN)SPM_POWERON_CONFIG_EN);
+  UINT32 Cfg;
+
+  //
+  // Unlock SPM register writes first (TF-A writes project code 0xB16 | BIT0
+  // before every MTCMOS operation), then read it back to validate the base.
+  //
+  MmioWrite32 ((UINTN)SPM_POWERON_CONFIG_EN, ((UINT32)SPM_PROJECT_CODE << 16) | 1);
+  Cfg = MmioRead32 ((UINTN)SPM_POWERON_CONFIG_EN);
 
   gMt6899SpmDiag[0] = Cfg;
   gMt6899SpmDiag[1] = MmioRead32 ((UINTN)SPM_PWR_STATUS);

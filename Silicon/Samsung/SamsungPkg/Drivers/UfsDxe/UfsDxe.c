@@ -1540,6 +1540,7 @@ InitUfsDriver (
   if (EFI_ERROR(Status)) {
     DEBUG((EFI_D_ERROR, "Failed to initialize UFS interface\n"));
     DEBUG((EFI_D_ERROR, "### UFSDIAG: interface-fail st=%r HALT ###\n", Status));
+    UfsPrintDiagSummary ();
     while (TRUE) { gBS->Stall (1000000); }
   }
 
