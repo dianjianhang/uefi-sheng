@@ -184,28 +184,6 @@ UINT32  gMt6899SpmDiag[6];
 
 STATIC
 UINT64
-Mt6899SmcCall (
-  IN UINT64 Fid,
-  IN UINT64 Arg1,
-  IN UINT64 Arg2,
-  IN UINT64 Arg3
-  )
-{
-  register UINT64 X0 __asm__("x0") = Fid;
-  register UINT64 X1 __asm__("x1") = Arg1;
-  register UINT64 X2 __asm__("x2") = Arg2;
-  register UINT64 X3 __asm__("x3") = Arg3;
-
-  __asm__ volatile ("smc #0"
-    : "+r" (X0), "+r" (X1), "+r" (X2), "+r" (X3)
-    :
-    : "memory", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
-      "x12", "x13", "x14", "x15", "x16", "x17");
-  return X0;
-}
-
-STATIC
-UINT64
 Mt6899UfsSipSmc (
   IN UINT64 Cmd,
   IN UINT64 Arg1,
