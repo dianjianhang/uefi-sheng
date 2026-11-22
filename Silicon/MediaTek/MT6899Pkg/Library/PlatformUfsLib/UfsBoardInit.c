@@ -132,22 +132,32 @@ STATIC UINT32  mVsScratch[0x400 / sizeof (UINT32)];
 //   arg1 (v1): MTCMOS on/off (1=on), MPHY op (0=BACKUP,1=RESTORE)
 //
 #define MTK_SIP_UFS_CONTROL     0xC2000276ULL
-#define UFS_SIP_MTCMOS_CTRL     0x200ULL
-#define UFS_SIP_MPHY_CTRL       0x100ULL
+#define UFS_SIP_MTCMOS_CTRL     0x200ULL   // BIT(9)
+#define UFS_SIP_MPHY_CTRL       0x100ULL   // BIT(8)
+#define UFS_SIP_REF_CLK_NOTIFY  0x8ULL     // BIT(3)
+#define UFS_SIP_DEVICE_RESET    0x2ULL     // BIT(1)
 #define UFS_MTCMOS_ON           1ULL
+#define UFS_MTCMOS_OFF          0ULL
 #define UFS_MPHY_RESTORE        1ULL
+#define UFS_REFCLK_ON           1ULL
+#define UFS_REFCLK_OFF          0ULL
+#define UFS_SMC_PRE_CHANGE      0ULL
+#define UFS_SMC_POST_CHANGE     1ULL
+#define UFS_DEV_RESET_ASSERT    0ULL   // active-low
+#define UFS_DEV_RESET_DEASSERT  1ULL
 
 STATIC
 UINT64
 Mt6899UfsSipSmc (
   IN UINT64 Cmd,
-  IN UINT64 Arg1
+  IN UINT64 Arg1,
+  IN UINT64 Arg2
   )
 {
   UINT64 X0 = MTK_SIP_UFS_CONTROL;
   UINT64 X1 = Cmd;
   UINT64 X2 = Arg1;
-  UINT64 X3 = 0;
+  UINT64 X3 = Arg2;
 
   __asm__ volatile ("smc #0"
     : "+r" (X0), "+r" (X1), "+r" (X2), "+r" (X3)
@@ -171,16 +181,61 @@ Mt6899MtcmosOn (
   VOID
   )
 {
-  UINT64 Rmt;
+  UINT64 RmtOff;
+  UINT64 RmtOn;
   UINT64 Rmp;
 
-  // MTCMOS power domain on (Linux: ufs_mtk_mtcmos_ctrl(true, res)).
-  Rmt = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_ON);
-  // Restore MPHY settings after power-on (ufs_mtk_mphy_ctrl(RESTORE, res)).
-  Rmp = Mt6899UfsSipSmc (UFS_SIP_MPHY_CTRL, UFS_MPHY_RESTORE);
+  // MTCMOS off first to reset the power domain (Linux: "First Restore
+  // here, to avoid backup unexpected value"), then on to init.
+  RmtOff = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_OFF, 0);
+  RmtOn  = Mt6899UfsSipSmc (UFS_SIP_MTCMOS_CTRL, UFS_MTCMOS_ON, 0);
+  // Restore MPHY settings after power-on.
+  Rmp = Mt6899UfsSipSmc (UFS_SIP_MPHY_CTRL, UFS_MPHY_RESTORE, 0);
 
-  DEBUG ((DEBUG_ERROR, "UFS SMC MTCMOS ret=%lx MPHY rst ret=%lx\n",
-    (UINTN)Rmt, (UINTN)Rmp));
+  DEBUG ((DEBUG_ERROR, "UFS SMC MTCMOS off=%lx on=%lx MPHYrst=%lx\n",
+    (UINTN)RmtOff, (UINTN)RmtOn, (UINTN)Rmp));
+}
+
+/**
+  Notify the SCP/PMIC to enable or disable the 26 MHz reference clock to the
+  UFS MPHY.  Linux calls ufs_mtk_ref_clk_notify(on, stage, res) around the
+  register-level REFCLK_REQUEST/ACK handshake; without the SMC the external
+  clock source stays gated and the MPHY PLL cannot lock (PA LINERESET).
+**/
+STATIC
+VOID
+Mt6899RefClkNotify (
+  IN UINT64  On,
+  IN UINT64  Stage
+  )
+{
+  UINT64 Ret = Mt6899UfsSipSmc (UFS_SIP_REF_CLK_NOTIFY, On, Stage);
+  DEBUG ((DEBUG_ERROR, "UFS SMC refclk on=%lx stage=%lx ret=%lx\n",
+    (UINTN)On, (UINTN)Stage, (UINTN)Ret));
+}
+
+/**
+  Pulse the UFS device reset (active-low RST_n).  Linux ufs_mtk_device_reset()
+  asserts low >= 10us, deasserts high, waits 10ms for the device to boot.
+**/
+STATIC
+VOID
+Mt6899DeviceReset (
+  VOID
+  )
+{
+  UINT64 Rlow;
+  UINT64 Rhigh;
+
+  // Assert reset (low).
+  Rlow = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_ASSERT, 0);
+  MicroSecondDelay (20);       // >= 10us per spec
+
+  // Deassert reset (high).
+  Rhigh = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_DEASSERT, 0);
+
+  DEBUG ((DEBUG_ERROR, "UFS SMC devrst lo=%lx hi=%lx\n",
+    (UINTN)Rlow, (UINTN)Rhigh));
 }
 
 STATIC
@@ -329,11 +384,17 @@ Mt6899RefClkEnable (
   UINT32 Value;
   UINT32 Waited;
 
+  // SMC PRE_CHANGE: tell SCP/PMIC to start the 26MHz XO.
+  Mt6899RefClkNotify (UFS_REFCLK_ON, UFS_SMC_PRE_CHANGE);
+
   MmioWrite32 ((UINTN)Ufs->IoAddr + REG_UFS_REFCLK_CTRL, REFCLK_REQUEST);
 
   for (Waited = 0; Waited < REFCLK_TIMEOUT_US; Waited += 10) {
     Value = MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_REFCLK_CTRL);
     if (((Value & REFCLK_ACK) >> 1) == (Value & REFCLK_REQUEST)) {
+      // SMC POST_CHANGE: confirm refclk is up.
+      Mt6899RefClkNotify (UFS_REFCLK_ON, UFS_SMC_POST_CHANGE);
+      MicroSecondDelay (32);   // ungating wait (Linux REFCLK_DEFAULT_WAIT_US)
       return EFI_SUCCESS;
     }
 
@@ -420,6 +481,11 @@ UfsBoardInit (
   // and without it the MPHY analog block stays off (MPHY regs read 0 in v9).
   //
   Mt6899MtcmosOn ();
+
+  // Reset the UFS device (active-low RST_n pulse via SMC) so it enters a
+  // clean state before we try to talk to it.  Linux calls this via
+  // vops->device_reset in ufshcd_link_startup error recovery.
+  Mt6899DeviceReset ();
 
   //
   // CRITICAL (v8 root-cause fix): enable the UFS clock gates.
