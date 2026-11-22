@@ -514,15 +514,35 @@ Mt6899ClockEnable (
   {
     UINTN Base;
     UINTN Off;
+    UINT32 V;
+    UINT32 Wt;
+
+    // Print only non-zero registers so each value is easy to read on a photo.
     for (Base = 0; Base < 2; Base++) {
       UINTN Addr = Base ? MT6899_UFS_CFG_PDN_BASE : MT6899_UFS_CFG_AO_BASE;
-      for (Off = 0; Off < 0x80; Off += 0x20) {
-        DEBUG ((DEBUG_ERROR, "UFS CFG %s %02lx: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-          Base ? "PDN" : "AO ", (UINTN)Off,
-          MmioRead32 ((UINTN)(Addr + Off + 0x00)), MmioRead32 ((UINTN)(Addr + Off + 0x04)),
-          MmioRead32 ((UINTN)(Addr + Off + 0x08)), MmioRead32 ((UINTN)(Addr + Off + 0x0C)),
-          MmioRead32 ((UINTN)(Addr + Off + 0x10)), MmioRead32 ((UINTN)(Addr + Off + 0x14)),
-          MmioRead32 ((UINTN)(Addr + Off + 0x18)), MmioRead32 ((UINTN)(Addr + Off + 0x1C))));
+      for (Off = 0; Off < 0x80; Off += 4) {
+        V = MmioRead32 ((UINTN)(Addr + Off));
+        if (V != 0) {
+          DEBUG ((DEBUG_ERROR, "CFG %s %02lx = %08x\n",
+            Base ? "PDN" : "AO ", (UINTN)Off, V));
+        }
+      }
+    }
+
+    //
+    // Isolation hunt: clear the low control bits of the unknown ufscfg
+    // registers one at a time and, after each, test whether the MPHY block
+    // became writable (write 1 to 0x8C, read back, restore).
+    //
+    for (Base = 0; Base < 2; Base++) {
+      UINTN Addr = Base ? MT6899_UFS_CFG_PDN_BASE : MT6899_UFS_CFG_AO_BASE;
+      for (Off = 0x10; Off <= 0x20; Off += 4) {
+        MmioAnd32 ((UINTN)(Addr + Off), ~0x00000003U);
+        MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 1);
+        Wt = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+        MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0);
+        DEBUG ((DEBUG_ERROR, "TRY %s %02lx clr03 -> wt=%08x\n",
+          Base ? "PDN" : "AO ", (UINTN)Off, Wt));
       }
     }
   }
