@@ -154,6 +154,11 @@ UINT32  gMt6899SpmDiag[6];
 #define SPM_POWERON_CONFIG_EN   (MT6899_SPM_BASE + 0x000)
 #define SPM_PWR_STATUS          (MT6899_SPM_BASE + 0x180)
 #define SPM_PROJECT_CODE        0xB16U
+// MT6899 SPM register offsets (drivers/misc/mediatek/lpm/.../mt6899/spm_reg.h)
+//   UFS0_PWR_CON      = SPM_BASE + 0xE18
+//   UFS0_PHY_PWR_CON  = SPM_BASE + 0xE1C
+#define MT6899_UFS0_PWR_CON_OFF      0xE18U
+#define MT6899_UFS0_PHY_PWR_CON_OFF  0xE1CU
 #define PWR_RST_B               BIT0
 #define PWR_ISO                 BIT1
 #define PWR_ON                  BIT2
@@ -279,77 +284,98 @@ SpmWaitAck (
 **/
 STATIC
 VOID
-Mt6899SpmProbeAndPowerPhy (
-  VOID
+SpmPowerOnDomain (
+  IN UINTN   Off,
+  IN BOOLEAN HasSram
   )
 {
-  UINTN  Off;
-  UINT32 V;
-  UINTN  i;
+  UINT32 V = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Off));
 
-  gMt6899SpmDiag[0] = MmioRead32 ((UINTN)SPM_POWERON_CONFIG_EN);
-  gMt6899SpmDiag[1] = MmioRead32 ((UINTN)SPM_PWR_STATUS);
-
-  gMt6899SpmDiag[2] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE10));
-  gMt6899SpmDiag[3] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE14));
-  gMt6899SpmDiag[4] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE2C));
-  gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE30));
-
-  DEBUG ((DEBUG_ERROR, "UFS SPM cfg=%08x sta=%08x E10=%08x E14=%08x E2C=%08x E30=%08x\n",
-    gMt6899SpmDiag[0], gMt6899SpmDiag[1], gMt6899SpmDiag[2], gMt6899SpmDiag[3],
-    gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
-
-  //
-  // Safety gate: SPM's POWERON_CONFIG_EN carries the project code 0xB16 in
-  // bits[31:16] once TF-A has unlocked it.  If that signature is absent the
-  // base address is wrong -- do NOT write anything.
-  //
-  if ((gMt6899SpmDiag[0] >> 16) != SPM_PROJECT_CODE) {
-    DEBUG ((DEBUG_ERROR, "UFS SPM signature mismatch (cfg=%08x), skip writes\n",
-      gMt6899SpmDiag[0]));
-    return;
-  }
-
-  //
-  // Pick the UFS PHY domain: prefer 0xE30 (mt8196 layout, closest generation),
-  // fall back to 0xE14 (mt8189 layout) if E30 reads back as all-ones (absent).
-  //
-  Off = (gMt6899SpmDiag[5] == 0xFFFFFFFF) ? 0xE14 : 0xE30;
-  V   = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Off));
-
-  DEBUG ((DEBUG_ERROR, "UFS SPM selected offset 0x%lx val=%08x\n", (UINTN)Off, V));
+  DEBUG ((DEBUG_ERROR, "UFS SPM dom 0x%lx before=%08x\n", (UINTN)Off, V));
 
   if ((V & PWR_ACK) != 0) {
-    DEBUG ((DEBUG_ERROR, "UFS SPM domain already ON (ack set), skip\n"));
+    DEBUG ((DEBUG_ERROR, "UFS SPM dom 0x%lx already ON\n", (UINTN)Off));
     return;
   }
 
-  // Unlock SPM write access.
+  // Unlock SPM register writes (project code 0xB16).
   MmioWrite32 ((UINTN)SPM_POWERON_CONFIG_EN, ((UINT32)SPM_PROJECT_CODE << 16) | 1);
 
   MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_ON);
   if (!SpmWaitAck (MT6899_SPM_BASE + Off, PWR_ACK, TRUE)) {
-    DEBUG ((DEBUG_ERROR, "UFS SPM PWR_ON ack timeout\n"));
+    DEBUG ((DEBUG_ERROR, "UFS SPM 0x%lx PWR_ACK timeout\n", (UINTN)Off));
   }
   MicroSecondDelay (50);
 
   MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_ON_2ND);
   if (!SpmWaitAck (MT6899_SPM_BASE + Off, PWR_ACK_2ND, TRUE)) {
-    DEBUG ((DEBUG_ERROR, "UFS SPM PWR_ON_2ND ack timeout\n"));
+    DEBUG ((DEBUG_ERROR, "UFS SPM 0x%lx PWR_ACK_2ND timeout\n", (UINTN)Off));
   }
 
   MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Off), ~(PWR_CLK_DIS | PWR_ISO));
   MicroSecondDelay (10);
   MmioOr32 ((UINTN)(MT6899_SPM_BASE + Off), PWR_RST_B);
 
-  MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Off), ~SRAM_PDN);
-  SpmWaitAck (MT6899_SPM_BASE + Off, SRAM_PDN_ACK, FALSE);
+  if (HasSram) {
+    MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Off), ~SRAM_PDN);
+    SpmWaitAck (MT6899_SPM_BASE + Off, SRAM_PDN_ACK, FALSE);
+  }
 
-  gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Off));
-  DEBUG ((DEBUG_ERROR, "UFS SPM after power-on 0x%lx = %08x\n",
-    (UINTN)Off, gMt6899SpmDiag[5]));
+  DEBUG ((DEBUG_ERROR, "UFS SPM dom 0x%lx after=%08x\n",
+    (UINTN)Off, MmioRead32 ((UINTN)(MT6899_SPM_BASE + Off))));
+}
 
-  (VOID)i;
+/**
+  Power on the MT6899 UFS power domains directly through the SPM.
+
+  TF-A exposes this only through MTK_SIP_KERNEL_UFS_CONTROL (0x276) which is
+  in the NS_EL1 table and therefore NOT callable from BL33 (UEFI).  The SPM is
+  ordinary MMIO, so we replay exactly what spm_mtcmos_ctrl() does.
+
+  Offsets are authoritative from the MT6899 BSP header
+  drivers/misc/mediatek/lpm/modules/include/mt6899/spm_reg.h:
+    UFS0_PWR_CON     = 0x1C001000 + 0xE18
+    UFS0_PHY_PWR_CON = 0x1C001000 + 0xE1C
+  The PHY domain is the one whose power-off makes every MPHY register read 0.
+**/
+STATIC
+VOID
+Mt6899SpmProbeAndPowerPhy (
+  VOID
+  )
+{
+  UINT32 Cfg = MmioRead32 ((UINTN)SPM_POWERON_CONFIG_EN);
+
+  gMt6899SpmDiag[0] = Cfg;
+  gMt6899SpmDiag[1] = MmioRead32 ((UINTN)SPM_PWR_STATUS);
+  gMt6899SpmDiag[2] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE10));
+  gMt6899SpmDiag[3] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xE14));
+  gMt6899SpmDiag[4] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PWR_CON_OFF));
+  gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PHY_PWR_CON_OFF));
+
+  DEBUG ((DEBUG_ERROR,
+    "UFS SPM cfg=%08x sta=%08x usb0=%08x audio=%08x ufs0=%08x ufsphy=%08x\n",
+    gMt6899SpmDiag[0], gMt6899SpmDiag[1], gMt6899SpmDiag[2],
+    gMt6899SpmDiag[3], gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
+
+  //
+  // Safety gate: POWERON_CONFIG_EN carries the project code 0xB16 in
+  // bits[31:16] once TF-A has unlocked it.  If absent, the SPM base is wrong
+  // and we must not write anything.
+  //
+  if ((Cfg >> 16) != SPM_PROJECT_CODE) {
+    DEBUG ((DEBUG_ERROR, "UFS SPM signature mismatch (cfg=%08x), skip writes\n", Cfg));
+    return;
+  }
+
+  // UFS controller domain first (usually already on), then the PHY domain.
+  SpmPowerOnDomain (MT6899_UFS0_PWR_CON_OFF, TRUE);
+  SpmPowerOnDomain (MT6899_UFS0_PHY_PWR_CON_OFF, FALSE);
+
+  gMt6899SpmDiag[4] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PWR_CON_OFF));
+  gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PHY_PWR_CON_OFF));
+  DEBUG ((DEBUG_ERROR, "UFS SPM final ufs0=%08x ufsphy=%08x\n",
+    gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
 }
 
 /**
