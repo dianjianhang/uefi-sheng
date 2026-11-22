@@ -372,6 +372,36 @@ Mt6899SpmProbeAndPowerPhy (
   gMt6899SpmDiag[5] = MmioRead32 ((UINTN)(MT6899_SPM_BASE + MT6899_UFS0_PHY_PWR_CON_OFF));
   DEBUG ((DEBUG_ERROR, "UFS SPM final ufs0=%08x ufsphy=%08x\n",
     gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
+
+  //
+  // v24: both domains report PWR_ON|ACK with ISO=0, so SpmPowerOnDomain()
+  // returns early and never clears the SSYS control fields.  Photos show
+  // SEL_SPM_OR_SUB_PM=1, PWR_ON_OFF=1 and SRAM_DORMANT_PD=3 remain set.
+  // Clean those fields explicitly (without toggling PWR_ON) and report the
+  // UFS sleep/UniPro PDN SRAM controls, which may also be left powered down.
+  //
+  MmioWrite32 ((UINTN)SPM_POWERON_CONFIG_EN, ((UINT32)SPM_PROJECT_CODE << 16) | 1);
+  {
+    UINTN   Addr;
+    UINT32  Before;
+    UINT32  After;
+
+    for (Addr = MT6899_UFS0_PWR_CON_OFF; Addr <= MT6899_UFS0_PHY_PWR_CON_OFF;
+         Addr += (MT6899_UFS0_PHY_PWR_CON_OFF - MT6899_UFS0_PWR_CON_OFF)) {
+      Before = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Addr));
+      MmioAnd32 ((UINTN)(MT6899_SPM_BASE + Addr),
+                 ~(UFS_SSYS_SEL_SPM_OR_SUB_PM | UFS_SSYS_PWR_ON_OFF |
+                   UFS_SSYS_RTFF_GRP_EN_MASK | UFS_SSYS_SRAM_DORMANT_MASK));
+      After = MmioRead32 ((UINTN)(MT6899_SPM_BASE + Addr));
+      DEBUG ((DEBUG_ERROR, "UFS SPM forceclean 0x%lx %08x -> %08x\n",
+        Addr, Before, After));
+    }
+  }
+  DEBUG ((DEBUG_ERROR, "UFS SPM sleep UFS_F0C=%08x UNIPRO_F10=%08x MSB=%08x/%08x\n",
+    MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xF0C)),
+    MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xF10)),
+    MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xF30)),
+    MmioRead32 ((UINTN)(MT6899_SPM_BASE + 0xF34))));
 }
 
 /**
@@ -775,6 +805,65 @@ Mt6899RefClkEnable (
 
   DEBUG ((DEBUG_ERROR, "UFS: refclk ack missing, reg=0x%08x\n", Value));
   return EFI_TIMEOUT;
+}
+
+/**
+  Post-link MPHY diagnostic / delayed bring-up (v24).
+
+  Photos show two distinct boot states: on some boots the MPHY/ufscfg
+  register windows read all zero and DME_LINK_STARTUP never completes; on
+  others the link comes up but the HS power-mode change fails.  Re-reading
+  the windows immediately after DME_LINK_STARTUP distinguishes a permanently
+  dead window from a PHY that is only powered once the link is running.  If
+  the window is live there, replay the clock enables and the preloader MPHY
+  tuning so the HS gear change sees a fully calibrated PHY.
+**/
+EFI_STATUS
+UfsPostLinkBringUp (
+  VOID
+  )
+{
+  UINT32 C8;
+  UINT32 A9C;
+  UINT32 AAC;
+  UINT32 A44;
+  UINT32 Aosta;
+  UINT32 Psta;
+
+  C8    = MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C));
+  A9C   = MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_9C));
+  AAC   = MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_AC));
+  A44   = MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_LN_RX_44));
+  Aosta = MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_STA_OFFSET));
+  Psta  = MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_STA_OFFSET));
+
+  DEBUG ((DEBUG_ERROR,
+    "UFS POSTLNK MPHY 8C=%08x 9C=%08x AC=%08x 44=%08x AOSTA=%08x PDSTA=%08x\n",
+    C8, A9C, AAC, A44, Aosta & UFSAO_CLK_MASK, Psta & UFSPDN_CLK_MASK));
+
+  if ((C8 == 0) && (A44 == 0) && (AAC == 0) && (A9C == 0)) {
+    DEBUG ((DEBUG_ERROR, "UFS POSTLNK MPHY window still zero with link up\n"));
+    return EFI_SUCCESS;
+  }
+
+  //
+  // The window is now live: the values written before link-up were dropped.
+  // Re-assert the gate enables and replay the calibration on the live PHY.
+  // Do not touch the MPHY reset here -- that would tear down the live link.
+  //
+  DEBUG ((DEBUG_ERROR, "UFS POSTLNK MPHY live -> replay clocks and tuning\n"));
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_CLR_OFFSET), UFSAO_CLK_MASK);
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_CLR_OFFSET), UFSPDN_CLK_MASK);
+  MicroSecondDelay (100);
+  Mt6899MphyPowerOn ();
+  Mt6899MphyTuning ();
+
+  DEBUG ((DEBUG_ERROR, "UFS POSTLNK after replay 8C=%08x 9C=%08x AC=%08x 44=%08x\n",
+    MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C)),
+    MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_9C)),
+    MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_AC)),
+    MmioRead32 ((UINTN)(MT6899_UFS_PHY_BASE + MP_LN_RX_44))));
+  return EFI_SUCCESS;
 }
 
 /**

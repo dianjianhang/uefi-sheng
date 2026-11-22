@@ -18,6 +18,7 @@
 // key values remain visible on the final screen.
 extern UINT32 gMt6899UfsDiag[14];
 extern UINT32 gMt6899SpmDiag[6];
+extern EFI_STATUS UfsPostLinkBringUp (VOID);
 
 STATIC
 VOID
@@ -1062,6 +1063,10 @@ UfsInitInterface (
       return EFI_DEVICE_ERROR;
     }
   }
+
+  // v24: the MPHY register window may only become live after link startup.
+  // Re-read it here and replay the tuning if so, before requesting HS gear.
+  UfsPostLinkBringUp ();
 
   DEBUG ((EFI_D_INFO, "UFS link is up\n"));
 
