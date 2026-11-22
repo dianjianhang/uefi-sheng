@@ -14,6 +14,24 @@
 
 #include "UfsDxe.h"
 
+// Filled by the MT6899 board init; printed again right before halting so the
+// key values remain visible on the final screen.
+extern UINT32 gMt6899UfsDiag[14];
+
+STATIC
+VOID
+UfsPrintDiagSummary (
+  VOID
+  )
+{
+  DEBUG ((EFI_D_ERROR,
+    "### UFSDIAG2 %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x ###\n",
+    gMt6899UfsDiag[0], gMt6899UfsDiag[1], gMt6899UfsDiag[2], gMt6899UfsDiag[3],
+    gMt6899UfsDiag[4], gMt6899UfsDiag[5], gMt6899UfsDiag[6], gMt6899UfsDiag[7],
+    gMt6899UfsDiag[8], gMt6899UfsDiag[9], gMt6899UfsDiag[10], gMt6899UfsDiag[11],
+    gMt6899UfsDiag[12], gMt6899UfsDiag[13]));
+}
+
 UINT8 gQueryParams[][5] = {
   /* [0] unused */
   {0,                    0,                              0,                           0, 0},
@@ -1509,6 +1527,7 @@ InitUfsDriver (
   if (EFI_ERROR(Status)) {
     DEBUG((EFI_D_ERROR, "Failed to initialize UFS host\n"));
     DEBUG((EFI_D_ERROR, "### UFSDIAG: host-fail st=%r HALT ###\n", Status));
+    UfsPrintDiagSummary ();
     while (TRUE) { gBS->Stall (1000000); }
   }
 
@@ -1601,6 +1620,7 @@ InitUfsDriver (
 
   if (Installed == 0) {
     DEBUG ((EFI_D_ERROR, "### UFSDIAG: 0 LUN block-io installed, HALT ###\n"));
+    UfsPrintDiagSummary ();
     while (TRUE) { gBS->Stall (1000000); }
   }
   DEBUG ((EFI_D_ERROR, "### UFSDIAG: %d LUN block-io installed, continue boot ###\n", Installed));

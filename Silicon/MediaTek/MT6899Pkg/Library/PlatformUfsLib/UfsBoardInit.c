@@ -77,6 +77,10 @@
 #define UFS_RST_ASSERT_REG       0x48
 #define UFS_RST_DEASSERT_REG     0x4C
 #define UFS_RST_UNIPRO_BIT       BIT0
+// ufscfg_ao reset-controller (vendor DTB syscon@112b8000/reset-controller,
+// ti,reset-bits = <0x48 0x9 0x4c 0x9 ...>): single reset at bit 9, which is
+// the UFS PHY reset.  If it stays asserted every MPHY register reads 0.
+#define UFS_AO_MPHY_RST_BIT      BIT9
 #define UFS_RST_CRYPTO_BIT       BIT1
 #define UFS_RST_HCI_BIT          BIT2
 
@@ -124,6 +128,18 @@
 STATIC UINT32  mVsScratch[0x400 / sizeof (UINT32)];
 
 //
+// Compact diagnostics that UfsDxe prints again right before it halts, so the
+// key values stay on the last screen instead of scrolling away.
+//   [0] entry OTSD        [1] ufscfg_ao STA     [2] ufscfg_pdn STA
+//   [3] MPHY 8C after power-on                  [4] SMCCC version
+//   [5] MTCMOS-on SMC ret [6] refclk SMC ret    [7] device-reset SMC ret
+//   [8] HCS after init    [9] OPT_CTRL0
+//   [10] MPHY 8C after MTCMOS (before clocks)   [11] MPHY 9C after power-on
+//   [12] HCE at entry                           [13] OTSD after board init
+//
+UINT32  gMt6899UfsDiag[14];
+
+//
 // MediaTek SiP SMC for UFS (from ufs-mediatek-sip.h).
 //   MTK_SIP_UFS_CONTROL = ARM_SMCCC_CALL_VAL(FAST_CALL, SMC_64,
 //                          OWNER_SIP(2), 0x276)
@@ -154,10 +170,41 @@ Mt6899UfsSipSmc (
   IN UINT64 Arg2
   )
 {
-  UINT64 X0 = MTK_SIP_UFS_CONTROL;
-  UINT64 X1 = Cmd;
-  UINT64 X2 = Arg1;
-  UINT64 X3 = Arg2;
+  //
+  // CRITICAL: the SMCCC ABI requires the function ID in x0 and arguments in
+  // x1..x3.  Without explicit register binding the compiler is free to pick
+  // any register, so the SMC ran with garbage and returned the unmodified FID
+  // (v10/v11 photos showed ret=0xC2000276 = the function ID itself).
+  //
+  register UINT64 X0 __asm__("x0") = MTK_SIP_UFS_CONTROL;
+  register UINT64 X1 __asm__("x1") = Cmd;
+  register UINT64 X2 __asm__("x2") = Arg1;
+  register UINT64 X3 __asm__("x3") = Arg2;
+
+  __asm__ volatile ("smc #0"
+    : "+r" (X0), "+r" (X1), "+r" (X2), "+r" (X3)
+    :
+    : "memory", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+      "x12", "x13", "x14", "x15", "x16", "x17");
+  return X0;
+}
+
+/**
+  Probe the SMCCC version (function ID 0x80000000).  A working SMC conduit
+  returns 0x10000 | minor (e.g. 0x10001 for SMCCC 1.1).  Anything else means
+  SMC is not usable from this exception level and every MTK SiP call below
+  is a no-op.
+**/
+STATIC
+UINT64
+Mt6899SmcccVersion (
+  VOID
+  )
+{
+  register UINT64 X0 __asm__("x0") = 0x80000000ULL;
+  register UINT64 X1 __asm__("x1") = 0;
+  register UINT64 X2 __asm__("x2") = 0;
+  register UINT64 X3 __asm__("x3") = 0;
 
   __asm__ volatile ("smc #0"
     : "+r" (X0), "+r" (X1), "+r" (X2), "+r" (X3)
@@ -192,6 +239,7 @@ Mt6899MtcmosOn (
   // Restore MPHY settings after power-on.
   Rmp = Mt6899UfsSipSmc (UFS_SIP_MPHY_CTRL, UFS_MPHY_RESTORE, 0);
 
+  gMt6899UfsDiag[5] = (UINT32)RmtOn;
   DEBUG ((DEBUG_ERROR, "UFS SMC MTCMOS off=%lx on=%lx MPHYrst=%lx\n",
     (UINTN)RmtOff, (UINTN)RmtOn, (UINTN)Rmp));
 }
@@ -210,6 +258,9 @@ Mt6899RefClkNotify (
   )
 {
   UINT64 Ret = Mt6899UfsSipSmc (UFS_SIP_REF_CLK_NOTIFY, On, Stage);
+  if (Stage == UFS_SMC_POST_CHANGE) {
+    gMt6899UfsDiag[6] = (UINT32)Ret;
+  }
   DEBUG ((DEBUG_ERROR, "UFS SMC refclk on=%lx stage=%lx ret=%lx\n",
     (UINTN)On, (UINTN)Stage, (UINTN)Ret));
 }
@@ -234,6 +285,7 @@ Mt6899DeviceReset (
   // Deassert reset (high).
   Rhigh = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_DEASSERT, 0);
 
+  gMt6899UfsDiag[7] = (UINT32)Rhigh;
   DEBUG ((DEBUG_ERROR, "UFS SMC devrst lo=%lx hi=%lx\n",
     (UINTN)Rlow, (UINTN)Rhigh));
 }
@@ -294,6 +346,8 @@ Mt6899ClockEnable (
   StaAo  = MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFSCFG_CG_STA_OFFSET));
   StaPdn = MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFSCFG_CG_STA_OFFSET));
 
+  gMt6899UfsDiag[1] = StaAo;
+  gMt6899UfsDiag[2] = StaPdn;
   DEBUG ((DEBUG_ERROR, "UFS CLK AO=%08x want=0 PDN=%08x want=0\n",
     StaAo & UFSAO_CLK_MASK, StaPdn & UFSPDN_CLK_MASK));
 }
@@ -323,6 +377,27 @@ Mt6899HostReset (
   DEBUG ((DEBUG_ERROR, "UFS: host reset done (0x48=0x%08x 0x4c=0x%08x)\n",
     MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFS_RST_ASSERT_REG)),
     MmioRead32 ((UINTN)(MT6899_UFS_CFG_PDN_BASE + UFS_RST_DEASSERT_REG))));
+}
+
+/**
+  Release the UFS PHY reset on the ufscfg_ao reset controller (bit 9).
+  MediaTek ti,syscon-reset blocks use +0x48 to assert and +0x4C to deassert.
+  While this reset is asserted every MPHY register reads back 0.
+**/
+STATIC
+VOID
+Mt6899MphyResetRelease (
+  VOID
+  )
+{
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFS_RST_ASSERT_REG), UFS_AO_MPHY_RST_BIT);
+  MicroSecondDelay (200);
+  MmioWrite32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFS_RST_DEASSERT_REG), UFS_AO_MPHY_RST_BIT);
+  MicroSecondDelay (1000);
+
+  DEBUG ((DEBUG_ERROR, "UFS MPHY reset released (ao 0x48=%08x 0x4c=%08x)\n",
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFS_RST_ASSERT_REG)),
+    MmioRead32 ((UINTN)(MT6899_UFS_CFG_AO_BASE + UFS_RST_DEASSERT_REG))));
 }
 
 /**
@@ -453,6 +528,8 @@ UfsBoardInit (
   {
     UINT32 Ot = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + REG_UFS_UFS_MMIO_OTSD_CTRL);
 
+    gMt6899UfsDiag[0] = Ot;
+    gMt6899UfsDiag[12] = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x34);
     DEBUG ((DEBUG_ERROR, "UFS BI entry OTSD=0x%08x LNK=%d HCS=0x%08x HCE=0x%08x\n",
       Ot, (Ot >> 24) & 0xFF,
       MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x30),
@@ -480,7 +557,12 @@ UfsBoardInit (
   // rodin.dtb has "mediatek,ufs-rtff-mtcmos"; Linux ufs_mtk_init() does this
   // and without it the MPHY analog block stays off (MPHY regs read 0 in v9).
   //
+  gMt6899UfsDiag[4] = (UINT32)Mt6899SmcccVersion ();
+  DEBUG ((DEBUG_ERROR, "UFS SMCCC version=0x%x\n", gMt6899UfsDiag[4]));
+
   Mt6899MtcmosOn ();
+  gMt6899UfsDiag[10] = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+  DEBUG ((DEBUG_ERROR, "UFS MPHY 8C after MTCMOS = %08x\n", gMt6899UfsDiag[10]));
 
   // Reset the UFS device (active-low RST_n pulse via SMC) so it enters a
   // clean state before we try to talk to it.  Linux calls this via
@@ -497,13 +579,17 @@ UfsBoardInit (
   Mt6899ClockEnable ();
 
   //
-  // Bring up the MPHY analog, then the reference clock, before the host reset
-  // carried out in ufs_mtk_hce_enable_notify().
+  // Release the UFS PHY reset (ufscfg_ao bit 9), then bring up the MPHY
+  // analog and the reference clock, before the host reset carried out in
+  // ufs_mtk_hce_enable_notify().
   //
+  Mt6899MphyResetRelease ();
   Mt6899MphyPowerOn ();
 
   {
     UINT32 C8 = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+    gMt6899UfsDiag[3] = C8;
+    gMt6899UfsDiag[11] = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_9C);
     DEBUG ((DEBUG_ERROR, "UFS MPHY after power-on 8C=%08x (was 0 in v7)\n", C8));
   }
 
@@ -523,6 +609,7 @@ UfsBoardInit (
   // clocks, re-power the MPHY and re-assert refclk (all idempotent).
   //
   Mt6899ClockEnable ();
+  Mt6899MphyResetRelease ();
   Mt6899MphyPowerOn ();
 
   Status = Mt6899RefClkEnable (Ufs);
@@ -571,6 +658,10 @@ UfsBoardInit (
     UINT32 Ot = MmioRead32 ((UINTN)Ufs->IoAddr + REG_UFS_UFS_MMIO_OTSD_CTRL);
     DEBUG ((DEBUG_ERROR, "UFS BI5 post OTSD=%08x LNK=%d\n", Ot, (Ot >> 24) & 0xFF));
   }
+
+  gMt6899UfsDiag[13] = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + REG_UFS_UFS_MMIO_OTSD_CTRL);
+  gMt6899UfsDiag[8] = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + 0x30);
+  gMt6899UfsDiag[9] = MmioRead32 ((UINTN)MT6899_UFS_HCI_BASE + REG_UFS_MMIO_OPT_CTRL0);
 
   DEBUG ((DEBUG_INFO, "UFS: MT6899 board init done (hci=0x%lx phy=0x%lx)\n",
           (UINTN)MT6899_UFS_HCI_BASE, (UINTN)MT6899_UFS_PHY_BASE));
