@@ -366,15 +366,10 @@ Mt6899SpmProbeAndPowerPhy (
     gMt6899SpmDiag[3], gMt6899SpmDiag[4], gMt6899SpmDiag[5]));
 
   //
-  // Safety gate: POWERON_CONFIG_EN carries the project code 0xB16 in
-  // bits[31:16] once TF-A has unlocked it.  If absent, the SPM base is wrong
-  // and we must not write anything.
+  // NOTE: MT6899's POWERON_CONFIG_EN does not read back the 0xB16 project
+  // code -- it only returns bit0 (v16 photo: cfg=0x00000001).  The write is
+  // the unlock, so do NOT gate the power sequence on a read-back signature.
   //
-  if ((Cfg >> 16) != SPM_PROJECT_CODE) {
-    DEBUG ((DEBUG_ERROR, "UFS SPM signature mismatch (cfg=%08x), skip writes\n", Cfg));
-    return;
-  }
-
   // UFS controller domain first (usually already on), then the PHY domain.
   SpmPowerOnDomain (MT6899_UFS0_PWR_CON_OFF, TRUE);
   SpmPowerOnDomain (MT6899_UFS0_PHY_PWR_CON_OFF, FALSE);
@@ -449,16 +444,13 @@ Mt6899DeviceReset (
   UINT64 Rlow;
   UINT64 Rhigh;
 
-  // UEFI runs as BL33, so only MTK_SIP_BL_UFS_CONTROL (0xC200040D) is routed
-  // to the UFS handler -- and that handler implements DEVICE_RESET only.
-  // Assert reset (low).
-  Rlow = Mt6899SmcCall (MTK_SIP_BL_UFS_CONTROL, UFS_SIP_DEVICE_RESET,
-                        UFS_DEV_RESET_ASSERT, 0);
+  // The BL33 table FID 0xC200040D returned -1 (not supported) on this TF-A;
+  // the kernel FID 0xC2000276 is reachable from UEFI (refclk call returned 0),
+  // so use it for DEVICE_RESET.
+  Rlow = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_ASSERT, 0);
   MicroSecondDelay (20);       // >= 10us per spec
 
-  // Deassert reset (high).
-  Rhigh = Mt6899SmcCall (MTK_SIP_BL_UFS_CONTROL, UFS_SIP_DEVICE_RESET,
-                         UFS_DEV_RESET_DEASSERT, 0);
+  Rhigh = Mt6899UfsSipSmc (UFS_SIP_DEVICE_RESET, UFS_DEV_RESET_DEASSERT, 0);
 
   gMt6899UfsDiag[7] = (UINT32)Rhigh;
   DEBUG ((DEBUG_ERROR, "UFS SMC devrst lo=%lx hi=%lx\n",
@@ -764,9 +756,25 @@ UfsBoardInit (
 
   {
     UINT32 C8 = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+    UINT32 T;
     gMt6899UfsDiag[3] = C8;
     gMt6899UfsDiag[11] = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_LN_DIG_RX_9C);
     DEBUG ((DEBUG_ERROR, "UFS MPHY after power-on 8C=%08x (was 0 in v7)\n", C8));
+
+    //
+    // Write-readback probe: proves whether the MPHY register block is clocked
+    // and powered at all.  A value that does not stick means the block is
+    // isolated (still unpowered / held in reset).
+    //
+    MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, 0x00000001);
+    T = MmioRead32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C);
+    MmioWrite32 ((UINTN)MT6899_UFS_PHY_BASE + MP_GLB_DIG_8C, C8);
+    DEBUG ((DEBUG_ERROR, "UFS MPHY write-test 8C<-1 read=%08x\n", T));
+
+    DEBUG ((DEBUG_ERROR, "UFS HCI MPHYWIN 2200=%08x 2204=%08x 2240=%08x\n",
+      MmioRead32 ((UINTN)Ufs->IoAddr + 0x2200),
+      MmioRead32 ((UINTN)Ufs->IoAddr + 0x2204),
+      MmioRead32 ((UINTN)Ufs->IoAddr + 0x2240)));
   }
 
   Status = Mt6899RefClkEnable (Ufs);
