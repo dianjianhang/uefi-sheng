@@ -498,12 +498,15 @@ UfsWriteUtrd (
   case UPIU_TRANSACTION_QUERY_REQ:
   case UPIU_TRANSACTION_NOP_OUT:
     //
-    // v32: UFSHCI 4.0 UTRD DW0 bits[31:28] are command_type.  A Query Request
-    // / NOP OUT is a DEVICE_MANAGEMENT function (2), not a SCSI command (0).
-    // The old Exynos-only value left command_type=0, so the HCI rejected every
-    // UTR and never overwrote the OCS_INVALID_COMMAND_STATUS sentinel.
+    // v33: UFSHCI spec UTRD DW0 bits[31:28] = command_type.  Per Linux
+    // ufshcd_prepare_req_desc_hdr(), ALL UTRs (including Query/NOP) use
+    // command_type = UTP_CMD_TYPE_UFS_STORAGE = 1, i.e. DW0 = 0x10000000
+    // (UTP_NATIVE_UFS_COMMAND).  v32's DEVICE_MANAGEMENT (2) is wrong:
+    // UTP_DEVICE_MANAGEMENT_FUNCTION is a *different* concept (UTP task
+    // management), not the UTRD command_type.  command_type=0 (v31) made the
+    // HCI treat queries as SCSI and never overwrite the OCS sentinel.
     //
-    utrd->dw[0] = UTP_REQ_DESC_INT_CMD | UTP_DEVICE_MANAGEMENT;
+    utrd->dw[0] = UTP_REQ_DESC_INT_CMD | UTP_NATIVE_UFS_COMMAND;
     utrd->dw[2] = OCS_INVALID_COMMAND_STATUS;
     break;
   default:
