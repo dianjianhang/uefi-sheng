@@ -3,6 +3,7 @@
 #include <Library/MemoryMapHelperLib.h>
 #include <Library/IoLib.h>
 #include <Library/TimerLib.h>
+#include <Library/CacheMaintenanceLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/DevicePathLib.h>
@@ -407,6 +408,13 @@ UfsUtpSend (
   case UPIU_TRANSACTION_NOP_OUT:
   case UPIU_TRANSACTION_COMMAND:
   case UPIU_TRANSACTION_QUERY_REQ:
+    //
+    // v34: DMA coherency. UTRD/UCD come from AllocateAlignedPages (write-back
+    // cacheable). The HCI reads them via DMA, so flush CPU cache to memory
+    // before ringing the doorbell, otherwise the HCI sees stale descriptors.
+    //
+    WriteBackDataCacheRange (Ufs->UtrdAddr, sizeof (struct UfsUtrd));
+    WriteBackDataCacheRange (Ufs->CmdDescAddr, sizeof (struct UfsCmdDesc));
     MmioWrite32((UINTN)(Ufs->IoAddr + REG_UTP_TRANSFER_REQ_DOOR_BELL), 1);
     break;
   default:
@@ -448,6 +456,13 @@ UfsUtpCheckResult (struct UfsHost *Ufs)
   struct UfsUtrd *utrd = Ufs->UtrdAddr;
   struct UfsUpiu *resp = &Ufs->CmdDescAddr->ResponseUpiu;
   struct UfsUpiuHeader *hdr = &resp->Header;
+
+  //
+  // v34: HCI wrote OCS/response via DMA; invalidate stale cache lines so CPU
+  // sees the controller's actual result instead of the initial sentinel.
+  //
+  InvalidateDataCacheRange (Ufs->UtrdAddr, sizeof (struct UfsUtrd));
+  InvalidateDataCacheRange (Ufs->CmdDescAddr, sizeof (struct UfsCmdDesc));
 
   if (Ufs->ScsiCmd)
     Ufs->ScsiCmd->Status = hdr->Status;

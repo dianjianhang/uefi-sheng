@@ -53,6 +53,7 @@
   gMediaTekPkgTokenSpaceGuid.PcdStorageIsEMMC|FALSE
 
 [LibraryClasses]
+  CacheMaintenanceLib|ArmPkg/Library/ArmCacheMaintenanceLib/ArmCacheMaintenanceLib.inf
   #
   # SEC Libraries
   #
